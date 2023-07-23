@@ -1,3 +1,4 @@
+import json
 from typing import List
 
 import scrapy
@@ -13,6 +14,7 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
 
     name = "google_privacy_policy"
     start_urls: List[str]
+    links: List[str]
 
     def __init__(self, search_query, num_pages=1, *args, **kwargs):
         """
@@ -25,6 +27,7 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
         super(GooglePrivacyPolicySpider, self).__init__(*args, **kwargs)
         self.start_urls = ["https://www.google.com/search?q=" + search_query]
         self.num_pages = num_pages
+        self.links = []
 
     def parse(self, response):
         """
@@ -42,6 +45,7 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
         links = link_extractor.extract_links(response)
 
         for link in links:
+            self.links.append(link.url)
             yield {"url": link.url}
 
         # Follow the "Next" button link and continue to the next search result page
@@ -67,6 +71,7 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
         links = link_extractor.extract_links(response)
 
         for link in links:
+            self.links.append(link.url)
             yield {"url": link.url}
 
         # Follow the "Next" button link recursively if more pages need to be scraped
@@ -76,14 +81,25 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
                 url=response.urljoin(next_page_link), callback=self.parse_next_page
             )
 
+    def closed(self, reason):
+        """
+        The closed method is called when the spider is closed. It will be executed after the crawl is finished.
+
+        Args:
+            reason (str): The reason the spider was closed.
+        """
+        # Save the links list as a JSON file after the crawl is finished
+
+        # TODO: add datetime to filename so they do not overwrite (and can be unified later)
+        with open("./data/links.json", "w") as json_file:
+            json.dump(self.links, json_file, indent=4)
+
 
 # Sample Test
 if __name__ == "__main__":
     from scrapy.crawler import CrawlerProcess
 
-    search_query = (
-        "site:example.com privacy policy"  # Replace example.com with the domain you want to search
-    )
+    search_query = "privacy policy"  # Replace example.com with the domain you want to search
     num_pages_to_scrape = 3  # Specify the number of search result pages to scrape
     process = CrawlerProcess(
         settings={
@@ -95,3 +111,4 @@ if __name__ == "__main__":
         GooglePrivacyPolicySpider, search_query=search_query, num_pages=num_pages_to_scrape
     )
     process.start()
+    print("DONE!")

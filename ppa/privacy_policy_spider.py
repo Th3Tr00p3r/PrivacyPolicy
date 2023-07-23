@@ -48,38 +48,11 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
             self.links.append(link.url)
             yield {"url": link.url}
 
-        # Follow the "Next" button link and continue to the next search result page
-        next_page_link = response.css("a#pnnext::attr(href)").get()
-        if next_page_link and self.num_pages > 1:
-            yield scrapy.Request(
-                url=response.urljoin(next_page_link), callback=self.parse_next_page
-            )
-
-    def parse_next_page(self, response):
-        """
-        Callback function to parse the next search result page and continue extracting URLs.
-
-        Args:
-            response (HtmlResponse): The response object from the next search result page.
-
-        Yields:
-            dict: A dictionary containing the URL of a relevant search result.
-        """
-        link_extractor = LinkExtractor(
-            allow=r".+", deny=r"google.com"
-        )  # Allow all links except google.com
-        links = link_extractor.extract_links(response)
-
-        for link in links:
-            self.links.append(link.url)
-            yield {"url": link.url}
-
         # Follow the "Next" button link recursively if more pages need to be scraped
         next_page_link = response.css("a#pnnext::attr(href)").get()
-        if next_page_link and self.num_pages > 1:
-            yield scrapy.Request(
-                url=response.urljoin(next_page_link), callback=self.parse_next_page
-            )
+        if next_page_link and self.num_pages > 0:
+            self.num_pages -= 1
+            yield scrapy.Request(url=response.urljoin(next_page_link))
 
     def closed(self, reason):
         """
@@ -91,7 +64,7 @@ class GooglePrivacyPolicySpider(scrapy.Spider):
         # Save the links list as a JSON file after the crawl is finished
 
         # TODO: add datetime to filename so they do not overwrite (and can be unified later)
-        with open("./data/links.json", "w") as json_file:
+        with open("./data/links2.json", "w") as json_file:
             json.dump(self.links, json_file, indent=4)
 
 
@@ -100,7 +73,7 @@ if __name__ == "__main__":
     from scrapy.crawler import CrawlerProcess
 
     search_query = "privacy policy"  # Replace example.com with the domain you want to search
-    num_pages_to_scrape = 3  # Specify the number of search result pages to scrape
+    num_pages_to_scrape = 100  # Specify the number of search result pages to scrape
     process = CrawlerProcess(
         settings={
             "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"

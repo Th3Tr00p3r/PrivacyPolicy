@@ -78,22 +78,16 @@ from pathlib import Path
 from typing import Generator, Iterable
 
 import gensim
-import nltk
-from nltk.corpus import stopwords
-from smart_open import open
-
-# Download the stopwords dataset (if not already downloaded)
-nltk.download("stopwords")
-
-# Get the list of english stopwords
-STOP_WORDS = set(stopwords.words("english"))
 
 URL_PATTERN = r"(http(s)?:\/\/.)?(www\.)?[-a-zA-Z0-9@:%._\+~#=]{2,256}\.[a-z]{2,6}\b([-a-zA-Z0-9@:%_\+.~#?&//=]*)"
 
 
-def reservoir_sampling(iterator, k):
+def reservoir_sampling(iterator, k, seed=None):
+
+    random.seed(seed)
 
     sample = []
+    print("Reservoir sampling...")  # TESTESTEST
     for i, item in enumerate(iterator):
         if i < k:
             sample.append(item)
@@ -124,7 +118,7 @@ class TagDocumentPairIterator:
         if self.n is None:
             self.policy_paths = list(policy_paths)
         else:
-            self.policy_paths = reservoir_sampling(policy_paths, self.n)
+            self.policy_paths = reservoir_sampling(policy_paths, self.n, self.seed)
 
     def __iter__(self):
         for fpath in self.policy_paths:
@@ -147,7 +141,7 @@ class TagDocumentPairIterator:
 
         # remove stopwords and return
         if self.should_filter_stopwords:
-            return [word for word in simp_proc_doc if word not in STOP_WORDS]
+            return gensim.parsing.preprocessing.remove_stopword_tokens(simp_proc_doc)
         else:
             return simp_proc_doc
 
@@ -294,6 +288,7 @@ from winsound import Beep
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 
 N_CPU_CORES = mp.cpu_count() // 2  # /2 due to hyperthreading,
+SEED = 17
 
 
 @dataclass
@@ -317,6 +312,9 @@ url_doc_corpus = TagDocumentPairIterator(policy_path_gen(), N, SEED, should_filt
 # Create tagged documents
 train_data = TaggedDocumentIterator(url_doc_corpus)
 
+print("Done.")
+
+# %%
 # Initialize and train the Doc2Vec model
 model_kwargs = {
     "vector_size": 400,
@@ -334,7 +332,7 @@ print(f"Training timing: {(time.perf_counter() - tic)/60:.1f} mins")
 
 # Save the trained model for future use
 PROJECT_ROOT = Path.cwd().parent
-model.save(str(PROJECT_ROOT / "models" / "privacy_policy_doc2vec.model"))
+model.save(PROJECT_ROOT / "models" / "privacy_policy_doc2vec.model")
 
 # Done!
 print("Done training.")
@@ -346,10 +344,10 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # %%
 from gensim.models import Doc2Vec
 
-PROJECT_ROOT = Path.cwd().parent
-
 # Replace 'your_model_file_path' with the actual path to your saved model file
-model = Doc2Vec.load(str(PROJECT_ROOT / "models" / "privacy_policy_doc2vec.model"))
+PROJECT_ROOT = Path.cwd().parent
+MODEL_PATH = PROJECT_ROOT / "models" / "privacy_policy_doc2vec.model"
+model = Doc2Vec.load(str(MODEL_PATH))
 
 # Done
 print("Model Loaded")
@@ -357,6 +355,10 @@ print("Model Loaded")
 
 # %% [markdown]
 # Sanity check - check that documents are most similar to themselves
+
+# %% [markdown]
+# ### TODO: Test how the URL tthing is doing.
+# ### TODO: try removing PPs of extreme length (according to histogram)
 
 # %%
 import collections
@@ -367,17 +369,23 @@ TOP_N = 2
 
 ranks = []
 second_ranks = []
-for idx, tag in enumerate(reservoir_sampling(model.dv.index_to_key, SAMPLE_SIZE)):
+for idx, tagged_doc in enumerate(train_data):
+
+    # Estimate percentage using first (random) `SAMPLE_SIZE` documents
+    if idx + 1 == SAMPLE_SIZE:
+        break
+
     # keep track
     if not (idx + 1) % (SAMPLE_SIZE // 10):
         print(f"{(idx+1)/(SAMPLE_SIZE):.1%}... ", end="")
 
     # Calculate similarities only for the TOP_N similar documents for the current inferred vector
-    sims = model.dv.most_similar([model.dv[tag]], topn=TOP_N)
+    inferred_vec = model.infer_vector(tagged_doc.words)
+    sims = model.dv.most_similar([inferred_vec], topn=TOP_N)
 
     # Find the rank of the tag in the top N
     try:
-        rank = [docid for docid, sim in sims].index(tag)
+        rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
     except ValueError:
         # Handle the case where the tag is not found in sims
         rank = -1  # Or any other value that indicates "not found"
@@ -388,6 +396,3 @@ print(" Done.")
 
 counter = collections.Counter(ranks)
 print("counter: ", counter)
-
-# %%
-second_ranks

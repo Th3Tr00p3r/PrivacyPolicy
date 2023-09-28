@@ -5,7 +5,7 @@
       hooks:
           - id: mypy
             args: [--no-strict-optional, --ignore-missing-imports]
-            exclude: ^data_analysis/example_scripts
+            # exclude: 
 
     - repo: local
       hooks:
@@ -24,7 +24,7 @@
       hooks:
           - id: isort
             args: [--profile, black, --filter-files]
-            exclude: ^data_analysis/example_scripts
+            exclude: ^notebooks
 
     - repo: https://github.com/ambv/black
       rev: 22.3.0

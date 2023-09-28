@@ -2,7 +2,7 @@
   "header": {
     "comment": "eric project file for project PPA",
     "copyright": "Copyright (C) 2023 Idomich, ",
-    "saved": "2023-08-01, 11:38:40"
+    "saved": "2023-09-27, 09:43:03"
   },
   "project": {
     "AUTHOR": "Idomich",
@@ -110,10 +110,6 @@
       ".venv/Lib/site-packages/numpy/core/tests/data/umath-validation-set-README.txt",
       ".venv/Lib/site-packages/numpy/typing/tests/data/mypy.ini",
       ".venv/Lib/site-packages/parsel-1.8.1.dist-info/top_level.txt",
-      ".venv/Lib/site-packages/pip-23.2.dist-info/AUTHORS.txt",
-      ".venv/Lib/site-packages/pip-23.2.dist-info/LICENSE.txt",
-      ".venv/Lib/site-packages/pip-23.2.dist-info/entry_points.txt",
-      ".venv/Lib/site-packages/pip-23.2.dist-info/top_level.txt",
       ".venv/Lib/site-packages/pip/_vendor/vendor.txt",
       ".venv/Lib/site-packages/pre_commit-3.3.3.dist-info/entry_points.txt",
       ".venv/Lib/site-packages/pre_commit-3.3.3.dist-info/top_level.txt",

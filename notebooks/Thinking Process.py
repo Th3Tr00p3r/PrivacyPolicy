@@ -459,14 +459,14 @@ else:
 # %% [markdown]
 # Sanity check - check that documents are most similar to themselves. I do not expect/desire to optimize the fraction of model-inferred documents which are most similar to themselves, as this might mean the model is overfitting. Instead, this is just a test to see that the model does something logical.
 #
-# It is worth mentioning that while purposfully attempting to overfit a small dataset of 1000 documents, I was only able to reach about 80%. I attribute this to noise in the training data.
+# It is worth mentioning that while purposfully attempting to overfit a small subset of 1000 documents and using a complex model (increased vector size), I was only able to reach about 80% - I attribute this to noise in the training data.
 
 # %%
 import collections
 
 # Set the number of top similar documents to consider
 SAMPLE_SIZE = N // 10
-TOP_N = 100
+TOP_N = 10
 
 ranks = []
 second_ranks = []
@@ -547,7 +547,7 @@ plt.ylabel("Principal Component 2")
 plt.grid(True)
 plt.show()
 
-# %%
+# Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]

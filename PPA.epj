@@ -2,7 +2,7 @@
   "header": {
     "comment": "eric project file for project PPA",
     "copyright": "Copyright (C) 2023 Idomich, ",
-    "saved": "2023-09-27, 09:43:03"
+    "saved": "2023-10-18, 21:09:59"
   },
   "project": {
     "AUTHOR": "Idomich",
@@ -3141,7 +3141,10 @@
       ".venv/Lib/site-packages/zope/interface/tests/test_verify.py",
       ".venv/Lib/site-packages/zope/interface/verify.py",
       ".venv/Scripts/jp.py",
-      "ppa/privacy_policy_spider.py"
+      "ppa/display.py",
+      "ppa/ppa.py",
+      "ppa/privacy_policy_spider.py",
+      "ppa/utils.py"
     ],
     "SPELLEXCLUDES": "",
     "SPELLLANGUAGE": "en_US",

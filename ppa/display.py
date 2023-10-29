@@ -1,6 +1,6 @@
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -139,8 +139,8 @@ class Plotter:
         [text.set_fontsize(self.fontsize) for text in [ax.title, ax.xaxis.label, ax.yaxis.label]]
 
 
-def display_scatter(arr2d, labels, title="", **kwargs):
-    """Expects `arr2d` to be a 2D array-like with samples along the 0th dimension"""
+def display_scatter(arr2d: np.ndarray, labels=None, title="", annots: List[str] = None, **kwargs):
+    """Expects `arr2d` to be a 2D array-like with samples along the 0th dimension. `annots` is expected to be synchronized with `arr2d`"""
 
     if arr2d.ndim != 2:
         raise ValueError("Must supply a 2D array! (sample rows, feature columns)")
@@ -159,16 +159,18 @@ def display_scatter(arr2d, labels, title="", **kwargs):
             ax.get_figure().colorbar(scatter, ax=ax)
         ax.set_title(title)
 
+        for idx, annot in enumerate(annots):
+            ax.annotate(annot, (arr2d[idx, 0], arr2d[idx, 1]), fontsize=8)
 
-def display_dim_reduction(arr2d, name: str, labels=None, **kwargs):
+
+def display_dim_reduction(arr2d, name: str, **kwargs):
     """Expects a 2D matrix with 2/3 components (columns)"""
     components = range(1, arr2d.shape[1] + 1)
-    axes = "xyz"
     axis_labels_dict = {
         f"{ax_str}label": f"Principle Component {component_num}"
-        for ax_str, component_num in zip(axes, components)
+        for ax_str, component_num in zip("xyz", components)
     }
-    display_scatter(arr2d, labels, **axis_labels_dict, title=f"{name} Visualization", **kwargs)
+    display_scatter(arr2d, title=f"{name} Visualization", **{**kwargs, **axis_labels_dict})
 
 
 def display_wordcloud(dct: Dictionary, per_doc: bool = False):

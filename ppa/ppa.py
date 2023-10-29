@@ -1,12 +1,20 @@
 import gzip
+import json
+import logging
+import logging.config
 import pickle
 import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+from winsound import Beep
 
+import aiofiles  # type: ignore
 import gensim
+import httpx
+import numpy as np
+import pandas as pd
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
 
@@ -16,6 +24,123 @@ from ppa.utils import timer
 # Also, can I use the special token method of the Dictionary for them?
 URL_PATTERN = r"(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?\/[a-zA-Z0-9]{2,}|((https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?)|(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}(\.[a-zA-Z0-9]{2,})?"
 EMAIL_PATTERN = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+RAW_DATA_FPATH = Path("tosdr_raw.json")
+DATABASE_FPATH = Path("tosdr_db.json")
+
+
+@dataclass
+class ToSDRDataLoader:
+    """Doc."""
+
+    api_url: str = "https://api.tosdr.org/search/v4/?query="
+    raw_data_fpath: Path = RAW_DATA_FPATH
+    database_fpath: Path = DATABASE_FPATH
+
+    async def load_data(
+        self,
+        queries: List[str],
+        force_extract=False,
+        force_transform=False,
+        beep=True,
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Doc."""
+
+        # Extract fresh raw data
+        if not self.raw_data_fpath.exists() or force_extract:
+            await self._extract_data(queries, **kwargs)
+            # Optionally beep when done (Assuming Windows OS)
+            if beep:
+                Beep(1000, 500)
+
+        # Transform and load afresh
+        if not self.database_fpath.exists() or force_transform:
+            # Transform the raw data into a dictionary object
+            df = self._transform_data()
+            # Save to a JSON file
+            df.to_json(self.database_fpath)
+
+        # Read the JSON file into a Pandas DataFrame
+        return pd.read_json(self.database_fpath)
+
+    def _transform_data(self) -> pd.DataFrame:
+        """Doc."""
+
+        # Read the JSON file into a Pandas DataFrame
+        df = pd.read_json(self.raw_data_fpath, lines=True)
+
+        # prepare the "parameters" columns for JSON normalization
+        df["parameters"] = df["parameters"].apply(lambda x: x["services"][0])
+
+        # normalize the JSON inside the "parameters" column
+        parameters_df = pd.json_normalize(df["parameters"], max_level=1)
+
+        # build a new DataFrame from the relevant data, and rename
+        df = pd.concat([df["message"], parameters_df[["id", "rating.letter"]]], axis=1)
+        df.rename(columns={"message": "tag", "rating.letter": "rating"}, inplace=True)
+
+        # replace "N/A" strings with NaNs
+        df["rating"].replace("N/A", np.nan, inplace=True)
+
+        # ignore nulls
+        df = df[df["rating"].notnull()]
+
+        return df
+
+    async def _extract_data(self, queries: List[str], timeout_s=10, **kwargs):
+        """Doc."""
+
+        async def write_response(response):
+            """
+            Write a response to the data file.
+
+            Args:
+                response: The response to write to the file.
+
+            Returns:
+                None
+            """
+            async with aiofiles.open(self.raw_data_fpath, "a") as json_file:
+                #                await json_file.write(json.dumps(data, indent=4)[1:-2] + ",\n")
+                await json_file.write(f"{json.dumps(response.json())}\n")
+
+        logging.info("Started loading data.")
+
+        # Ensure file exists
+        with open(self.raw_data_fpath, "w"):
+            pass
+
+        # Make requests asynchronously
+        async with httpx.AsyncClient() as client:
+            for query in queries:
+                try:
+                    # call API (sibgle query)
+                    response = await client.get(f"{self.api_url}{query}", timeout=timeout_s)
+
+                    # If succesful call
+                    if response.status_code == 200:
+                        # Check that data exists (not empty)
+                        if not self._is_data_empty(response):
+                            await write_response(response)
+                            logging.info(f"{query}: Success!")
+                        else:
+                            logging.info(f"{query}: Data is empty!")
+                    else:
+                        logging.info(
+                            f"{query}: Failed to fetch data. Status code: {response.status_code}"
+                        )
+
+                except httpx.TimeoutException as exc:
+                    logging.info(f"{query}: Timed-out while fetching data. Error: {exc}")
+                    continue
+
+        logging.info("Finished loading data.")
+
+    def _is_data_empty(self, response) -> bool:
+        """Doc."""
+
+        return not bool(response.json()["parameters"]["services"])
 
 
 @dataclass
@@ -28,10 +153,17 @@ class SampleGenerator:
     id_corpus: bool = False
     dct: Dictionary = None
 
+    def __repr__(self):
+        return f"SampleGenerator({self.n_samples - self.offset} samples. fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
+
     def __iter__(self):
         """Doc."""
 
         #         print(f"Iterating over {self.n_samples - self.offset} samples.") # TESTESTEST
+
+        # check that the generator is not meant to be empty, to avoid loading the entire file for nothing
+        if self.offset == self.n_samples:
+            return
 
         offset = self.offset
         with gzip.open(self.fpath, "rb") as input_file:
@@ -70,12 +202,15 @@ class CorpusProcessor:
     seed: int = None
     dct: Dictionary = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.total_samples: int = len(self.fpaths)
         # shuffle the paths (reproducible with seed)
         if self.seed is not None:
             random.seed(self.seed)
             random.shuffle(self.fpaths)
+
+    def __repr__(self):
+        return f"CorpusProcessor({len(self.fpaths)} docs, should_filter_stopwords={self.should_filter_stopwords}, seed={self.seed}, min_tokens={self.min_tokens}, max_tokens={self.max_tokens})"
 
     @timer()
     def process(self, force=False, id_corpus=True, **kwargs):

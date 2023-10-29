@@ -1,8 +1,28 @@
 import asyncio
 import functools
+import logging
 import time
+from pathlib import Path
 from typing import Callable
 from winsound import Beep
+
+import yaml  # type: ignore
+
+
+def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):
+    """
+    Configure the logging package for the whole application and ensure folder and initial files exist.
+    """
+
+    Path.mkdir(log_path, parents=True, exist_ok=True)
+    init_log_file_list = ["log.txt"]
+    for init_log_file in init_log_file_list:
+        log_file_path = log_path / init_log_file
+        open(log_file_path, "a").close()
+
+    with open(log_path.parent / "logging_config.yaml", "r") as f:
+        config = yaml.safe_load(f.read())
+        logging.config.dictConfig(config)
 
 
 def timer(threshold_ms: float = 0.0, beep=True) -> Callable:

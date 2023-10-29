@@ -1,5 +1,12 @@
+# eric
+.eric7project/
+*.epj
+
 # virtual environment
 .venv/
+
+# Log folder
+logs/
 
 # model folder
 models/

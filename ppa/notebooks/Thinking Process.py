@@ -234,35 +234,37 @@ SHOULD_RETRAIN = False
 
 if not SHOULD_RETRAIN:
     # load the last trained model
-    model = Doc2Vec.load(str(MODEL_PATH))
+    unsupervised_model = Doc2Vec.load(str(MODEL_PATH))
 
     # Done
-    print("Model Loaded")
+    print("Unsupervised Model Loaded")
     # TODO: print some model details
 
 else:
     # Initialize and train the Doc2Vec model
-    model_kwargs = {
+    unsupervised_model_kwargs = {
         "vector_size": 300,
         "window": 5,
         "hs": 1,
         "epochs": 10
         #         "workers": mp.cpu_count(),
     }
-    model = Doc2Vec(**model_kwargs)
+    unsupervised_model = Doc2Vec(**unsupervised_model_kwargs)
 
     # Build vocabulary
     print("Building vocabulary... ", end="")
-    model.build_vocab(train_data)
+    unsupervised_model.build_vocab(train_data)
 
     # Train the model
-    print(f"Training model... ", end="")
+    print(f"Training unsupervised model... ", end="")
     tic = time.perf_counter()
-    model.train(train_data, total_examples=model.corpus_count, epochs=model.epochs)
+    unsupervised_model.train(
+        train_data, total_examples=unsupervised_model.corpus_count, epochs=unsupervised_model.epochs
+    )
 
     # Save the trained model for future use
     print(f"Saving to '{MODEL_PATH}'... ", end="")
-    model.save(str(MODEL_PATH))
+    unsupervised_model.save(str(MODEL_PATH))
     print("Done!")
 
     # Done!
@@ -272,6 +274,7 @@ else:
 
 # %% [markdown]
 # ## 3.2 Sanity check
+# ### TODO: Admit this check into the codebase
 # check that documents are most similar to themselves. I do not expect/desire to optimize the fraction of model-inferred documents which are most similar to themselves, as this might mean the model is overfitting. Instead, this is just a test to see that the model does something logical.
 #
 # It is worth mentioning that while purposfully attempting to overfit a small subset of 1000 documents and using a complex model (increased vector size), I was only able to reach about 80% - I attribute this to noise in the training data.
@@ -280,42 +283,48 @@ else:
 import collections
 from winsound import Beep
 
-# Set the number of top similar documents to consider
-SAMPLE_SIZE = N // 10
-TOP_N = 10
+if SHOULD_RETRAIN:
+    model = unsupervised_model
 
-ranks = []
-second_ranks = []
-for idx, tagged_doc in enumerate(train_data):
+    # Set the number of top similar documents to consider
+    SAMPLE_SIZE = N // 10
+    TOP_N = 10
 
-    # Estimate percentage using first (random) `SAMPLE_SIZE` documents
-    if idx + 1 == SAMPLE_SIZE:
-        break
+    ranks = []
+    second_ranks = []
+    for idx, tagged_doc in enumerate(train_data):
 
-    # keep track
-    if not (idx + 1) % (SAMPLE_SIZE // 10):
-        print(f"{(idx+1)/(SAMPLE_SIZE):.0%}... ", end="")
+        # Estimate percentage using first (random) `SAMPLE_SIZE` documents
+        if idx + 1 == SAMPLE_SIZE:
+            break
 
-    # Calculate similarities only for the TOP_N similar documents for the current inferred vector
-    inferred_vec = model.infer_vector(tagged_doc.words)
-    sims = model.dv.most_similar([inferred_vec], topn=TOP_N)
+        # keep track
+        if not (idx + 1) % (SAMPLE_SIZE // 10):
+            print(f"{(idx+1)/(SAMPLE_SIZE):.0%}... ", end="")
 
-    # Find the rank of the tag in the top N
-    try:
-        rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
-    except ValueError:
-        # Handle the case where the tag is not found in sims
-        rank = -1  # Or any other value that indicates "not found"
-    ranks.append(rank)
+        # Calculate similarities only for the TOP_N similar documents for the current inferred vector
+        inferred_vec = model.infer_vector(tagged_doc.words)
+        sims = model.dv.most_similar([inferred_vec], topn=TOP_N)
 
-    second_ranks.append(sims[1])
-print(" Done.")
+        # Find the rank of the tag in the top N
+        try:
+            rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
+        except ValueError:
+            # Handle the case where the tag is not found in sims
+            rank = -1  # Or any other value that indicates "not found"
+        ranks.append(rank)
 
-counter = collections.Counter(ranks)
-print("counter: ", counter)
+        second_ranks.append(sims[1])
+    print(" Done.")
 
-# Done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+    counter = collections.Counter(ranks)
+    print("counter: ", counter)
+
+    # Done
+    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+else:
+    print("Skipping...")
 
 # %% [markdown]
 # # 4 Model Evaluation
@@ -328,6 +337,8 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
 from ppa.display import Plotter, display_dim_reduction
+
+model = unsupervised_model
 
 N_samples = 1000
 
@@ -351,27 +362,230 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # PCA
 
 # %%
+# from sklearn.decomposition import PCA
+
+# # Perform PCA to reduce dimensionality for visualization
+# pca = PCA(n_components=2)  # You can adjust the number of components as needed
+# pca_result = pca.fit_transform(document_vectors_array)
+
+# annots = [tagged_doc.tags[0] for idx, doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
+# display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
+
+# %% [markdown]
+# Let's try t-SNE as well
+
+# %%
+# from sklearn.manifold import TSNE
+
+# tsne = TSNE(
+#     n_components=2,
+#     perplexity=15,
+#     learning_rate=200,
+#     n_iter=1000,
+#     n_iter_without_progress=500,
+#     random_state=SEED,
+# )
+# tsne_result = tsne.fit_transform(document_vectors_array)
+
+# annots = [tagged_doc.tags[0] for idx, doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
+# display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
+
+# %% [markdown]
+# We need to get some clue as to what the above means. Let's try gathering several "good" and "bad" privacy policies, and see where they stand in the PCA picture.
+
+# %% [markdown]
+# # Using ToS;DR API for scraping data about privacy policies
+# ### TODO: Perhaps I should add the ToS;DR grades as second tags for the policies which have ones, and those could be considered labeled data? As in, can the same grades (perhaps just "good" or "bad" (A, B, considered "good", C, D, E considered "bad") in the test data (watch for bias!) be used to predict different vectors? need to see how that works - should ask ChatGPT
+
+# %% [markdown]
+# # TODO: consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
+
+# %% [markdown]
+# # 5 Incorprating labeled data
+# ## 5.1 ETL for Policy Ratings
+# Getting all tags, for searching the ToS;DR database
+
+# %%
+from itertools import chain
+
+# N = 10
+N = np.inf
+
+print(f"Getting URLs/tags... ", end="")
+# tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
+tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
+print(f"{len(tags):,} tags obtained.")
+
+# %% [markdown]
+# ETL
+
+# %%
+import asyncio
+from ppa.ppa import ToSDRDataLoader
+from ppa.utils import config_logging
+
+# get all URLs for which I have PPs
+
+
+# set flags
+# FORCE_EXT = True
+FORCE_EXT = False
+
+FORCE_TRANS = True
+# FORCE_TRANS = False
+
+# Configure logging
+config_logging()
+
+# Instantiate data-loading object
+data_loader = ToSDRDataLoader()
+
+# Get the current event loop
+loop = asyncio.get_event_loop()
+
+# Run the asynchronous operation in the event loop
+ratings_df = loop.run_until_complete(
+    data_loader.load_data(
+        tags,
+        timeout_s=15,
+        force_extract=FORCE_EXT,
+        force_transform=FORCE_TRANS,
+    )
+)
+
+# ratings_df = await data_loader.load_data(
+#     tags,
+#     timeout_s=15,
+#     force_extract=FORCE_EXT,
+#     force_transform=FORCE_TRANS,
+# )
+
+Beep(1000, 500)
+print("Done.")
+
+# how many datapoints are there
+print("Number of records: ", len(ratings_df))
+
+# how many labels do I have
+print("Number of labels: ", ratings_df["rating"].notna().sum())
+
+# how many possible duplicates do I have
+print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
+
+ratings_df.sample(10)
+
+# %% [markdown]
+# ## 5.2 Exploration
+# ### 5.2.1 Checking for duplicates in data according to rating IDs
+#
+# Let's try to check what policies with duplicate IDs look like - are they really the same? Note that ToS;DR rates terms-of-service together with privacy policies - I don't really know what same IDs mean!
+#
+# To do this, let's take the ID with, say, 5 entries in `ratings_df`:
+
+# %%
+# ratings_df['id'].value_counts()[ratings_df['id'].value_counts() == 5]
+
+# %% [markdown]
+# choosing one of them
+
+# %%
+# result = ratings_df[ratings_df['id'] == 9465]
+# result
+
+# %% [markdown]
+# and find all matching tags (URLs) in the corpus (both training and testing):
+
+# %%
+# corpus, _ = cp.generate_train_test_sets(test_frac=0)
+
+# training_samples = [tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in result["tag"].tolist()]
+
+# training_samples
+
+# %% [markdown]
+# It appears that at least for one ID, the privacy policies are different. For now, we will disregard the IDs.
+
+# %% [markdown]
+# ### 5.2.2 Checking for Bias in Labeled Data
+
+# %%
+with Plotter() as ax:
+    ax.hist(sorted(ratings_df["rating"]))
+
+
+# %% [markdown]
+# As one might expect, good privacy policies are hard to come by. As such, I will, for now, label privacy policies as either 'good' ('A' or 'B' rating) vs. 'bad' ('C', 'D', or 'E' rating):
+
+# %%
+def relabel_rating(rating: str):
+    """Doc."""
+
+    if rating in "AB":
+        return "good"
+    elif rating in "CDE":
+        return "bad"
+    else:
+        return rating
+
+
+ratings_df["rating"] = ratings_df["rating"].apply(relabel_rating)
+
+with Plotter() as ax:
+    ax.hist(sorted(ratings_df["rating"]))
+
+# %%
+ratings_df[ratings_df["tag"] == "google.com"]
+
+# %%
+ratings_df.loc[ratings_df["tag"] == "google.com", "rating"].iloc[0]
+
+# %% [markdown]
+# Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
+
+# %% [markdown]
+# ### 5.2.3 Visualizing Labeled Data Using Unsupervised Model
+# Let's visualize the all labeled data over the unsupervised model we have trained.
+#
+# First, let's infer vectors for all the policies for which we have labels:
+
+# %%
+from ppa.display import Plotter, display_dim_reduction
+
+# define the model
+model = unsupervised_model
+
+corpus, _ = cp.generate_train_test_sets(test_frac=0)
+
+print("Gathering all rated policies... ", end="")
+labeled_policies = [
+    tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in ratings_df["tag"].tolist()
+]
+print("Done.")
+
+# Infer document vectors for the test data
+print("Inferring vectors for test documents... ", end="")
+document_vectors = [model.infer_vector(doc.words) for idx, doc in enumerate(labeled_policies)]
+print("Done.")
+
+# Convert document vectors to a numpy array
+document_vectors_array = np.array(document_vectors)
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
 from sklearn.decomposition import PCA
 
 # Perform PCA to reduce dimensionality for visualization
 pca = PCA(n_components=2)  # You can adjust the number of components as needed
 pca_result = pca.fit_transform(document_vectors_array)
 
-with Plotter(figsize=(10, 8)) as ax:
-    display_dim_reduction(pca_result, "PCA", parent_ax=ax)
-
-    # TODO: create a wrapper function for 'display_dim_reduction' which includes the annotation with 'test_data' argument
-    # Annotate the points with document labels
-    for idx, tagged_doc in enumerate(test_data):
-        if idx == N_samples:
-            break
-
-        # Annotate only a subset of points for clarity (adjust as needed)
-        if idx % 10 == 0:  # Annotate every 10th point
-            ax.annotate(tagged_doc.tags[0], (pca_result[idx, 0], pca_result[idx, 1]), fontsize=8)
-
-# %% [markdown]
-# Let's try t-SNE as well
+annots = [
+    tagged_doc.tags[0]
+    for tagged_doc in labeled_policies
+    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+]
+display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
 
 # %%
 from sklearn.manifold import TSNE
@@ -385,21 +599,104 @@ tsne = TSNE(
     random_state=SEED,
 )
 tsne_result = tsne.fit_transform(document_vectors_array)
-with Plotter(figsize=(10, 8)) as ax:
-    display_dim_reduction(tsne_result, "t-SNE", parent_ax=ax)
 
-    # TODO: create a wrapper function for 'display_dim_reduction' which includes the annotation with 'test_data' argument
-    # Annotate the points with document labels
-    for idx, tagged_doc in enumerate(test_data):
-        if idx == N_samples:
-            break
-
-        # Annotate only a subset of points for clarity (adjust as needed)
-        if idx % 10 == 0:  # Annotate every 10th point
-            ax.annotate(tagged_doc.tags[0], (tsne_result[idx, 0], tsne_result[idx, 1]), fontsize=8)
+annots = [
+    tagged_doc.tags[0]
+    for tagged_doc in labeled_policies
+    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+]
+display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
-# We need to get some clue as to what the above means. Let's try gathering several "good" and "bad" privacy policies, and see where they stand in the PCA picture.
+# So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model might not capture what separates "good"/"bad" policies.
+# I will now try retraining the model with the new labels
+
+# %% [markdown]
+# # WIP: Retrain/Update the Model with Some Labeled Data (Semi-Supervised)
+
+# %% [markdown]
+# Update the corpus with labeled data. Save separately.
+
+# %%
+
+# %%
+# # Load your TaggedDocument objects from disk
+# # These objects should contain a URL as the .tags attribute
+# # and should be updated with the corresponding labels (A/B/C/D/E)
+# # based on the URL
+
+# # Update TaggedDocument objects with labels
+
+# # Example: Assuming you have a dictionary mapping URLs to labels
+# url_to_label = {
+#     "example.com/policy1": "A",
+#     "example.com/policy2": "B",
+#     # Add more URL-label mappings
+# }
+
+# # Now, update the tags in your TaggedDocument objects
+# for doc in tagged_documents:
+#     url = doc.tags[0]
+#     label = url_to_label.get(url, None)  # Get the label for this URL
+#     if label:
+#         doc.tags.append(label)  # Add the label as a tag
+
+# # Retrain the model
+# model.build_vocab(tagged_documents)
+# model.train(tagged_documents, total_examples=model.corpus_count, epochs=model.epochs)
+
+# # Save the updated model
+# model.save("your_updated_model")
+
+
+# %% [markdown]
+# # Label test policies according to nearest labeld policy from training coprus
+
+# %%
+# from gensim.models import Doc2Vec
+# import gensim
+# from gensim.models.doc2vec import TaggedDocument
+
+# # Load your pre-trained Doc2Vec model
+# model = Doc2Vec.load("your_model_path")
+
+# # Tokenize your test privacy policy, for example:
+# test_policy_tokens = ["list", "of", "tokenized", "words", "in", "the", "test", "policy"]
+
+# # Infer the vector for your test document
+# test_vector = model.infer_vector(test_policy_tokens)
+
+# # Find the top N most similar documents
+# similar_documents = model.docvecs.most_similar([test_vector], topn=N)
+
+# # Initialize a list to store the labels of the most similar documents
+# nearest_labels = []
+
+# # Loop through the most similar documents
+# for doc_id, similarity in similar_documents:
+#     # Retrieve the TaggedDocument based on the doc_id
+#     similar_doc = TaggedDocument.load("your_tagged_documents_path/" + doc_id + ".tagged")
+
+#     # Check if the similar document has a label
+#     if similar_doc.tags[0] in labeled_documents:
+#         nearest_labels.append(labeled_documents[similar_doc.tags[0]])
+
+#     # If you have reached the desired number of labeled neighbors
+#     if len(nearest_labels) >= N:
+#         break
+
+# # Now you have the labels from the nearest neighbors
+# # If none of them have labels, you can set a default category
+
+# # Example: If all the neighbors are unclassified, set a default label
+# if not nearest_labels:
+#     default_label = "Unclassified"
+# else:
+#     # Choose the label from the first neighbor (the most similar one)
+#     default_label = nearest_labels[0]
+
+# print("Predicted Label:", default_label)
+
 
 # %% [markdown]
 # # TODO: this will only be relevant once a metric is devised

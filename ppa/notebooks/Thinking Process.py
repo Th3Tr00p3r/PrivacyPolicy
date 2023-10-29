@@ -17,7 +17,6 @@
 # ### TODO: try removing PPs of extreme length (according to histogram) - see how it effects  clustering - it definitely affects training time! Compare say cutting at 5000 token vs. 2000 tokens.
 # ### TODO: Consider better preprocessing of documents - a better understanding of the document structure might be needed (use HTML instead of markdown? or identify headers etc. with special tokens?)
 # ### TODO: Implement cross-validation training, once a metric is devised
-# ### TODO: consider memory-mapping the train/test data - check the size in MBytes of the array (say 5000 integers per row, and 100K rows... sounds like alot)
 
 # %%
 # # %reload_ext autoreload
@@ -423,6 +422,7 @@ print(f"{len(tags):,} tags obtained.")
 import asyncio
 from ppa.ppa import ToSDRDataLoader
 from ppa.utils import config_logging
+import pandas as pd
 
 # get all URLs for which I have PPs
 
@@ -440,25 +440,13 @@ config_logging()
 # Instantiate data-loading object
 data_loader = ToSDRDataLoader()
 
-# Get the current event loop
-loop = asyncio.get_event_loop()
-
-# Run the asynchronous operation in the event loop
-ratings_df = loop.run_until_complete(
-    data_loader.load_data(
-        tags,
-        timeout_s=15,
-        force_extract=FORCE_EXT,
-        force_transform=FORCE_TRANS,
-    )
-)
-
-# ratings_df = await data_loader.load_data(
+# ratings_df = await data_loader.load_data( # type: ignore
 #     tags,
 #     timeout_s=15,
 #     force_extract=FORCE_EXT,
 #     force_transform=FORCE_TRANS,
 # )
+ratings_df = pd.DataFrame()  # TESTESTEST - to shut mypy up
 
 Beep(1000, 500)
 print("Done.")
@@ -533,12 +521,6 @@ ratings_df["rating"] = ratings_df["rating"].apply(relabel_rating)
 with Plotter() as ax:
     ax.hist(sorted(ratings_df["rating"]))
 
-# %%
-ratings_df[ratings_df["tag"] == "google.com"]
-
-# %%
-ratings_df.loc[ratings_df["tag"] == "google.com", "rating"].iloc[0]
-
 # %% [markdown]
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
 
@@ -554,7 +536,7 @@ from ppa.display import Plotter, display_dim_reduction
 # define the model
 model = unsupervised_model
 
-corpus, _ = cp.generate_train_test_sets(test_frac=0)
+corpus = cp.generate_samples()
 
 print("Gathering all rated policies... ", end="")
 labeled_policies = [
@@ -572,6 +554,9 @@ document_vectors_array = np.array(document_vectors)
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %% [markdown]
+# And now, let's visualize them, with only the "good" policies annotated by URL:
 
 # %%
 from sklearn.decomposition import PCA
@@ -608,7 +593,7 @@ annots = [
 display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
-# So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model might not capture what separates "good"/"bad" policies.
+# So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model does not capture what separates "good"/"bad" policies.
 # I will now try retraining the model with the new labels
 
 # %% [markdown]
@@ -618,6 +603,16 @@ display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 # Update the corpus with labeled data. Save separately.
 
 # %%
+url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
+cp.add_label_tags(url_rating_dict)
+
+# %% [markdown]
+# Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
+
+# %%
+
+# %% [markdown]
+# Re-train the model (now semi-supervised):
 
 # %%
 # # Load your TaggedDocument objects from disk

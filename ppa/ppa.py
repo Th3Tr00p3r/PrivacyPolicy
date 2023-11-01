@@ -6,7 +6,7 @@ import pickle
 import random
 import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass
 from pathlib import Path
 from typing import Dict, List
 from winsound import Beep
@@ -19,7 +19,7 @@ import pandas as pd
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
 
-from ppa.utils import timer
+from ppa.utils import IndexedFile, get_file_index_path, timer
 
 # TODO: Separate between two cases for URL-like strings - companyname.com should be <COMPANYNAME>, www.companyname.com should be <URL>.
 # Also, can I use the special token method of the Dictionary for them?
@@ -187,51 +187,47 @@ class ToSDRDataLoader:
 @dataclass
 class SampleGenerator:
     """
-    Generate samples from a data file.
+    Generate samples from file.
 
     Args:
         fpath (Path): The path to the data file.
         n_samples (int): The number of samples to generate.
         offset (int): The offset for skipping samples (default is 0).
-        id_corpus (bool): Whether to generate samples with integer IDs (default is False).
         dct (Dictionary): The Gensim Dictionary for ID conversion (default is None).
     """
 
     fpath: Path
-    n_samples: int
-    offset: int = 0
-    id_corpus: bool = False
-    dct: Dictionary = None
+    start_pos_list: InitVar[List[int]]
+    dct: Dictionary
+    index_suffix: InitVar[str] = "_idx"
 
-    def __repr__(self):
-        return f"SampleGenerator(({(self.n_samples - self.offset):,} samples) fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
+    def __post_init__(self, index_suffix: str, start_pos_list: List[int]):
+        """Doc."""
+
+        self.indexed_file = IndexedFile(self.fpath, "read", start_pos_list, index_suffix)
+
+    #    def __repr__(self):
+    #        return f"SampleGenerator(({(self.n_samples - self.offset):,} samples) fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
 
     def __iter__(self):
         """
         Iterate over samples in the data file.
         """
-        # Check that the generator is not meant to be empty to avoid loading the entire file for nothing
-        if self.offset == self.n_samples:
-            return
 
-        offset = self.offset
-        with gzip.open(self.fpath, "rb") as input_file:
+        with self.indexed_file as idx_input_file:
             try:
-                for _ in range(self.n_samples):
+                while True:
                     # Deserialize and yield one document at a time
-                    tagged_doc = pickle.load(input_file)
-                    # Skip 'offset' first samples
-                    if offset:
-                        offset -= 1
-                        continue  # Skip this sample
-                    if self.id_corpus:
+                    tagged_doc = idx_input_file.read()
+                    try:
                         yield TaggedDocument(
                             [self.dct[id] for id in tagged_doc.words], tagged_doc.tags
                         )
-                    else:
+                    except KeyError:
+                        # words are tokens, not token IDs
                         yield tagged_doc
 
-            except EOFError:
+            except IndexError:
                 pass  # End of file
 
 
@@ -252,11 +248,11 @@ class CorpusProcessor:
         dct (Dictionary): The Gensim Dictionary for document ID conversion (default is None).
 
     Methods:
-        process(force=False, id_corpus=True, **kwargs):
+        process(force=False, **kwargs):
             Process the corpus and save it to the specified directory.
-        generate_train_test_sets(n_samples=None, test_frac=0.2, id_corpus=True):
+        generate_train_test_sets(n_samples=None, test_frac=0.2):
             Generate training and testing sets from the processed data.
-        generate_samples(n_samples=None, id_corpus=True):
+        generate_samples(n_samples=None):
             Generate document samples from the processed data.
     """
 
@@ -272,30 +268,34 @@ class CorpusProcessor:
 
     def __post_init__(self) -> None:
         self.total_samples: int = len(self.fpaths)
+
+        # file paths:
+        self.dict_path = self.save_dir_path / "dictionary.pkl"
+        self.corpus_path = self.save_dir_path / "corpus.pkl.gz"
+        self.id_corpus_path = self.save_dir_path / "corpus_id.pkl.gz"
+        self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.pkl.gz"
+
         # Shuffle the paths (reproducible with seed)
         if self.seed is not None:
             random.seed(self.seed)
-            random.shuffle(self.fpaths)
 
     def __repr__(self):
         return f"CorpusProcessor({len(self.fpaths)} docs, should_filter_stopwords={self.should_filter_stopwords}, seed={self.seed}, min_tokens={self.min_tokens}, max_tokens={self.max_tokens})"
 
-    @timer()
-    def process(self, force=False, id_corpus=True, **kwargs):
-        # TODO: make id_corpus the norm
+    @timer(1000)
+    def process(self, force=False, **kwargs):
         """
         Process the corpus and save it to the specified directory.
 
         Args:
             force (bool): Force reprocessing (default is False).
-            id_corpus (bool): Whether to generate samples with integer IDs (default is True).
 
         Returns:
             None
         """
         if not force:
             # Try loading an existing dictionary
-            self.dct = Dictionary.load(str(self.save_dir_path / "dictionary.pkl"))
+            self.dct = Dictionary.load(str(self.dict_path))
             print("Loaded existing dictionary.")
             print("Using existing training data.")
         else:
@@ -305,7 +305,7 @@ class CorpusProcessor:
             )
             # Initialize a Dictionary object
             self.dct = Dictionary()
-            with gzip.open(self.save_dir_path / "train_data.pkl.gz", "wb") as output_file:
+            with IndexedFile(self.corpus_path, "write") as idx_output_file:
                 # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
                 for fidx, fpath in enumerate(self.fpaths):
                     # Track progress visually
@@ -320,34 +320,42 @@ class CorpusProcessor:
                         # Create a TaggedDocument instance
                         tagged_doc = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
                         # Serialize the document tokens using pickle and write to the compressed file
-                        pickle.dump(tagged_doc, output_file, protocol=pickle.HIGHEST_PROTOCOL)
+                        idx_output_file.write(tagged_doc)
                 print(" - Done.")
-            print("Saving Dictionary... ", end="")
-            self.dct.save(str(self.save_dir_path / "dictionary.pkl"))
-            print("Done.")
-        # ID corpus
-        if id_corpus and force:
-            print(
-                f"Re-Processing and saving {self.total_samples:,} TaggedDocument objects to disk: ",
-                end="",
-            )
-            with gzip.open(self.save_dir_path / "train_data_id.pkl.gz", "wb") as output_file:
-                # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
-                for fidx, tagged_doc in enumerate(self.generate_samples(id_corpus=False)):
-                    # Track progress visually
-                    if not (fidx + 1) % (self.total_samples // 100):
-                        print("o", end="")
-                    # Open and process each file
-                    tagged_id_doc = TaggedDocument(
-                        words=self.dct.doc2idx(tagged_doc.words), tags=tagged_doc.tags
-                    )
-                    # Serialize the document tokens using pickle and write to the compressed file
-                    pickle.dump(tagged_id_doc, output_file, protocol=pickle.HIGHEST_PROTOCOL)
-                print(" - Done.")
-            # Delete the tokenized corpus
-            (self.save_dir_path / "train_data.pkl.gz").unlink()
 
-    @timer()
+            #            # keep path to index file
+            #            self.unlabeled_idx_fpath = idx_output_file.idx_fpath
+
+            print("Saving Dictionary... ", end="")
+            self.dct.save(str(self.dict_path))
+            print("Done.")
+
+            # ID corpus
+            if force:
+                print(
+                    f"Re-Processing and saving {self.total_samples:,} TaggedDocument objects to disk: ",
+                    end="",
+                )
+                with IndexedFile(self.id_corpus_path, "write") as idx_output_file:
+                    # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
+                    for fidx, tagged_doc in enumerate(self.generate_samples(self.corpus_path)):
+                        # Track progress visually
+                        if not (fidx + 1) % (self.total_samples // 100):
+                            print("o", end="")
+                        # Open and process each file
+                        tagged_id_doc = TaggedDocument(
+                            words=self.dct.doc2idx(tagged_doc.words), tags=tagged_doc.tags
+                        )
+                        # Serialize the document tokens using pickle and write to the compressed file
+                        idx_output_file.write(tagged_id_doc)
+                    print(" - Done.")
+                # Delete the tokenized corpus
+                (self.corpus_path).unlink()
+
+    #                # keep path to index file
+    #                self.unlabeled_idx_fpath = idx_output_file.idx_fpath
+
+    @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
         """Doc."""
 
@@ -360,7 +368,7 @@ class CorpusProcessor:
                 f"Adding labels and saving {self.total_samples:,} TaggedDocument objects to disk: ",
                 end="",
             )
-            with gzip.open(self.save_dir_path / "labeled_corpus.pkl.gz", "wb") as output_file:
+            with IndexedFile(self.labeled_corpus_path, "write") as idx_output_file:
                 # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
                 for fidx, tagged_doc in enumerate(self.generate_samples()):
                     # Track progress visually
@@ -368,18 +376,34 @@ class CorpusProcessor:
                         print("o", end="")
                     # add label if available in `tag_label_dict`
                     with suppress(KeyError):
-                        tagged_doc.tags.insert(
-                            1, tag_label_dict[tagged_doc.tags[0]]
-                        )  # always insert after first tag (URL)
+                        # always insert after first tag (URL)
+                        tagged_doc.tags.insert(1, tag_label_dict[tagged_doc.tags[0]])
                         # remove all but the first 2 tags, second being the label
                         while len(tagged_doc.tags) > 2:
                             tagged_doc.tags.pop()
+
+                    # back to IDs
+                    tagged_id_doc = TaggedDocument(
+                        words=self.dct.doc2idx(tagged_doc.words), tags=tagged_doc.tags
+                    )
                     # Serialize the document tokens using pickle and write to the compressed file
-                    pickle.dump(tagged_doc, output_file, protocol=pickle.HIGHEST_PROTOCOL)
+                    try:
+                        idx_output_file.write(tagged_id_doc, tagged_id_doc.tags[1])
+                    except IndexError:
+                        idx_output_file.write(tagged_id_doc)
+
+                # keep index file path
+                self.labeled_idx_fpath = idx_output_file.idx_fpath
                 print(" - Done.")
 
-    def generate_train_test_sets(
-        self, n_samples: int = None, test_frac: float = 0.2, labeled=False, id_corpus=True
+    @timer(1000)
+    def generate_train_test_sets(  # noqa: C901
+        self,
+        fpath: Path = None,
+        n_samples: int = None,
+        test_frac: float = 0.2,
+        labeled=False,
+        shuffled=False,
     ):
         """
         Generate training and testing sets from the processed data.
@@ -387,25 +411,104 @@ class CorpusProcessor:
         Args:
             n_samples (int): The number of samples to generate (default is None).
             test_frac (float): The fraction of samples to use for testing (default is 0.2).
-            id_corpus (bool): Whether to generate samples with integer IDs (default is True).
 
         Returns:
             Tuple[SampleGenerator, SampleGenerator]: A tuple of training and testing sample generators.
         """
         n_samples = n_samples or self.total_samples
         if labeled:
-            fpath = self.save_dir_path / "labeled_corpus.pkl.gz"
+            fpath = fpath or self.labeled_corpus_path
         else:
-            fpath = self.save_dir_path / f"train_data{('_id' if id_corpus else '')}.pkl.gz"
+            fpath = fpath or self.id_corpus_path
+
+        file_idx_path = get_file_index_path(fpath)
+
+        # Calculate the number of training samples
+        n_train = int(n_samples * (1 - test_frac))
+
+        if labeled:
+            # Sort the index into a dictionary
+            index_dict: Dict[str, List[int]] = {}
+            with gzip.open(file_idx_path, "rb") as idx_file:
+                while True:
+                    try:
+                        start_pos, note = pickle.load(idx_file)
+                        if note not in index_dict:
+                            index_dict[note] = []
+                        index_dict[note].append(start_pos)
+                    except EOFError:
+                        break
+
+            # Shuffle the index (optional) - this means choosing different train/test sets
+            if shuffled:
+                for start_pos_list in index_dict.values():
+                    random.shuffle(start_pos_list)
+
+            # Calculate the number of "good," "bad," and "unlabeled" policies in training set (stratified)
+            label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+            train_frac = 1 - test_frac
+            subset_factor = n_samples / self.total_samples
+            train_factor = train_frac * subset_factor
+            n_train_good = int(label_counts_dict["good"] * train_factor)
+            if not n_train_good:
+                n_train_good = int(label_counts_dict["good"] * train_frac)
+                n_train_bad = int(label_counts_dict["bad"] * train_frac)
+            else:
+                n_train_bad = int(label_counts_dict["bad"] * train_factor)
+            n_train_unlabeled = int(label_counts_dict["unlabeled"] * train_factor)
+
+            # Collect training set file index
+            train_start_positions = []
+            # Collect training set file index
+            for _ in range(n_train_good):
+                train_start_positions.append(index_dict["good"].pop())
+            for _ in range(n_train_bad):
+                train_start_positions.append(index_dict["bad"].pop())
+            for _ in range(n_train_unlabeled):
+                train_start_positions.append(index_dict["unlabeled"].pop())
+
+            # use the rest as test set file index
+            n_test_good = n_samples - n_train_good
+            n_test_bad = n_samples - n_train_bad
+            n_test_unlabeled = n_samples - n_train_unlabeled
+            try:
+                test_start_positions = (
+                    index_dict["good"][:n_test_good]
+                    + index_dict["bad"][:n_test_bad]
+                    + index_dict["unlabeled"][:n_test_unlabeled]
+                )
+            except KeyError as exc:
+                raise RuntimeError(f"Not all types of labels exist! [{exc}]")
+
+        # all unlabeled
+        else:
+            # Get the entire file index as a list
+            index_list = []
+            with gzip.open(file_idx_path, "rb") as idx_file:
+                while True:
+                    try:
+                        start_pos, _ = pickle.load(idx_file)
+                        index_list.append(start_pos)
+                    except EOFError:
+                        break
+
+            # create train/test file indices
+            train_start_positions = index_list[:n_train]
+            test_start_positions = index_list[n_train:n_samples]
+
+        # shuffle the index - this means the training set is shuffled (might be the same set, but different order)
+        random.shuffle(train_start_positions)
+        random.shuffle(test_start_positions)
 
         # Initialize re-generators
-        n_train_samples = round(n_samples * (1 - test_frac))
-        train_sample_loader = SampleGenerator(
-            fpath, n_train_samples, id_corpus=id_corpus, dct=self.dct
-        )
-        test_sample_loader = SampleGenerator(
-            fpath, n_samples, offset=n_train_samples, id_corpus=id_corpus, dct=self.dct
-        )
+        #        print("[generate_train_test_sets] train_start_positions: ", train_start_positions) # TESTESTEST
+        train_sample_loader = SampleGenerator(fpath, train_start_positions, self.dct)
+        try:
+            test_sample_loader = SampleGenerator(fpath, test_start_positions, self.dct)
+        except ValueError:
+            # test_start_positions is empty - happens when `generate_samples` is called
+            test_sample_loader = None
+
         return train_sample_loader, test_sample_loader
 
     def generate_samples(self, *args, **kwargs):

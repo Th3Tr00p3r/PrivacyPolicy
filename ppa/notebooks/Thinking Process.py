@@ -16,6 +16,7 @@
 # %% [markdown]
 # ### TODO: try removing PPs of extreme length (according to histogram) - see how it effects  clustering - it definitely affects training time! Compare say cutting at 5000 token vs. 2000 tokens.
 # ### TODO: Consider better preprocessing of documents - a better understanding of the document structure might be needed (use HTML instead of markdown? or identify headers etc. with special tokens?)
+# ### TODO: try identifying the name of the company/URL in the policy and convert to a special token
 # ### TODO: Implement cross-validation training, once a metric is devised
 
 # %%
@@ -82,10 +83,10 @@ print("Loading all privacy policy paths to memory... ", end="")
 policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
-# # TESTEST - use only N paths!
-# N_PATHS = 1_000
-# print(f"\nWARNING! USING JUST {N_PATHS:,} PATHS!")
-# policy_paths = policy_paths[:N_PATHS]
+# TESTEST - use only N paths!
+N_PATHS = 10_000
+print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
+policy_paths = policy_paths[:N_PATHS]
 
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
@@ -124,7 +125,7 @@ from ppa.display import Plotter
 import numpy as np
 
 N = cp.total_samples // 10
-pp_lengths = np.array([len(tagged_doc.words) for tagged_doc in cp.generate_samples(N)])
+pp_lengths = np.array([len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=N)])
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
 
@@ -192,7 +193,7 @@ display_wordcloud(filtered_dct, per_doc=True)
 target_token = "url"
 
 # Iterate through each document and check if the token is in the document
-for tagged_doc in cp.generate_samples(N):
+for tagged_doc in cp.generate_samples(n_samples=N):
     if target_token in tagged_doc.words:
         print(f"{tagged_doc.tags[0]}:\n")
         print(" ".join(tagged_doc.words))
@@ -214,7 +215,7 @@ for tagged_doc in cp.generate_samples(N):
 # %%
 N = cp.total_samples // 10
 TEST_FRAC = 0.2
-train_data, test_data = cp.generate_train_test_sets(N, test_frac=TEST_FRAC)
+train_data, test_data = cp.generate_train_test_sets(n_samples=N, test_frac=TEST_FRAC)
 print(f"Using {N:,} Samples ({N/cp.total_samples:.1%} of available samples, {TEST_FRAC:.1%} test).")
 
 # %% [markdown]
@@ -431,8 +432,8 @@ import pandas as pd
 # FORCE_EXT = True
 FORCE_EXT = False
 
-FORCE_TRANS = True
-# FORCE_TRANS = False
+# FORCE_TRANS = True
+FORCE_TRANS = False
 
 # Configure logging
 config_logging()
@@ -440,7 +441,7 @@ config_logging()
 # Instantiate data-loading object
 data_loader = ToSDRDataLoader()
 
-# ratings_df = await data_loader.load_data( # type: ignore
+# ratings_df = await data_loader.load_data(  # type: ignore
 #     tags,
 #     timeout_s=15,
 #     force_extract=FORCE_EXT,
@@ -461,6 +462,7 @@ print("Number of labels: ", ratings_df["rating"].notna().sum())
 print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
 
 ratings_df.sample(10)
+
 
 # %% [markdown]
 # ## 5.2 Exploration
@@ -497,9 +499,8 @@ ratings_df.sample(10)
 # ### 5.2.2 Checking for Bias in Labeled Data
 
 # %%
-with Plotter() as ax:
-    ax.hist(sorted(ratings_df["rating"]))
-
+# with Plotter() as ax:
+#     ax.hist(sorted(ratings_df["rating"]))
 
 # %% [markdown]
 # As one might expect, good privacy policies are hard to come by. As such, I will, for now, label privacy policies as either 'good' ('A' or 'B' rating) vs. 'bad' ('C', 'D', or 'E' rating):
@@ -531,7 +532,29 @@ with Plotter() as ax:
 # First, let's infer vectors for all the policies for which we have labels:
 
 # %%
+from ppa.utils import get_file_index_path
+from typing import Dict, List
+import gzip
+import pickle
+
+labeled_corpus_index_path = get_file_index_path(cp.labeled_corpus_path)
+
+index_dict: Dict[str, List[int]] = {}
+with gzip.open(labeled_corpus_index_path, "rb") as idx_file:
+    while True:
+        try:
+            start_pos, note = pickle.load(idx_file)
+            if note not in index_dict:
+                index_dict[note] = []
+            index_dict[note].append(start_pos)
+        except EOFError:
+            break
+
+labeled_start_pos = index_dict["good"] + index_dict["bad"]
+
+# %%
 from ppa.display import Plotter, display_dim_reduction
+from ppa.ppa import SampleGenerator
 
 # define the model
 model = unsupervised_model
@@ -539,9 +562,11 @@ model = unsupervised_model
 corpus = cp.generate_samples()
 
 print("Gathering all rated policies... ", end="")
-labeled_policies = [
-    tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in ratings_df["tag"].tolist()
-]
+# labeled_policies = [
+#     tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in ratings_df["tag"].tolist()
+# ]
+labeled_policies = SampleGenerator(cp.labeled_corpus_path, labeled_start_pos, cp.dct)
+
 print("Done.")
 
 # Infer document vectors for the test data
@@ -559,38 +584,38 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # And now, let's visualize them, with only the "good" policies annotated by URL:
 
 # %%
-from sklearn.decomposition import PCA
+# from sklearn.decomposition import PCA
 
-# Perform PCA to reduce dimensionality for visualization
-pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(document_vectors_array)
+# # Perform PCA to reduce dimensionality for visualization
+# pca = PCA(n_components=2)  # You can adjust the number of components as needed
+# pca_result = pca.fit_transform(document_vectors_array)
 
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in labeled_policies
-    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-]
-display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
+# annots = [
+#     tagged_doc.tags[0]
+#     for tagged_doc in labeled_policies
+#     if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+# ]
+# display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
 
 # %%
-from sklearn.manifold import TSNE
+# from sklearn.manifold import TSNE
 
-tsne = TSNE(
-    n_components=2,
-    perplexity=15,
-    learning_rate=200,
-    n_iter=1000,
-    n_iter_without_progress=500,
-    random_state=SEED,
-)
-tsne_result = tsne.fit_transform(document_vectors_array)
+# tsne = TSNE(
+#     n_components=2,
+#     perplexity=15,
+#     learning_rate=200,
+#     n_iter=1000,
+#     n_iter_without_progress=500,
+#     random_state=SEED,
+# )
+# tsne_result = tsne.fit_transform(document_vectors_array)
 
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in labeled_policies
-    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-]
-display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
+# annots = [
+#     tagged_doc.tags[0]
+#     for tagged_doc in labeled_policies
+#     if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+# ]
+# display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
 # So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model does not capture what separates "good"/"bad" policies.
@@ -603,13 +628,25 @@ display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 # Update the corpus with labeled data. Save separately.
 
 # %%
+# SHOULD_FORCE_LABELING = True
+SHOULD_FORCE_LABELING = False
+
 url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
-cp.add_label_tags(url_rating_dict)
+cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
 
 # %% [markdown]
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
 
 # %%
+train_set, test_set = cp.generate_train_test_sets(n_samples=1000, labeled=True)
+
+# TEST - check percentages in train/test splits
+# from collections import Counter
+
+# print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in train_set]))
+# print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in test_set]))
+
+# Beep(1000, 500)
 
 # %% [markdown]
 # Re-train the model (now semi-supervised):
@@ -701,7 +738,7 @@ cp.add_label_tags(url_rating_dict)
 # # Sample tagged documents training data
 # print("Preparing training data... ", end="")
 # N = 10_000
-# train_data = cp.generate_samples(N)
+# train_data = cp.generate_samples(n_samples=N)
 # print(f"Training data ready.")
 
 # %%

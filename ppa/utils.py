@@ -1,12 +1,91 @@
 import asyncio
 import functools
+import gzip
 import logging
+import pickle
 import time
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, List
 from winsound import Beep
 
 import yaml  # type: ignore
+
+
+@dataclass
+class IndexedFile:
+
+    fpath: Path
+    mode: str
+    start_pos_list: List[int] = field(default_factory=list)
+    index_suffix: InitVar[str] = "_idx"
+
+    def __post_init__(self, index_suffix: str):
+        """Doc."""
+
+        if self.mode == "read" and not self.start_pos_list:
+            raise ValueError("Must supply 'start_pos_list' in 'read' mode!")
+
+        if self.mode == "write":
+            # build index file-path
+            self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
+
+    def __enter__(self):
+        if self.mode == "read":
+            self.file = gzip.open(self.fpath, "rb")
+            self.pos_idx = 0  # keep track of the file position index
+        elif self.mode == "write":
+            self.file = gzip.open(self.fpath, "wb")
+            self.index_file = gzip.open(self.idx_fpath, "wb")
+            self.notes = []
+
+        return self
+
+    def __exit__(self, *args):
+        self.file.close()
+        if self.mode == "write":
+            for start_pos, note in zip(self.start_pos_list, self.notes):
+                pickle.dump((start_pos, note), self.index_file, protocol=pickle.HIGHEST_PROTOCOL)
+            self.index_file.close()
+
+    def write(self, obj, note: str = "unlabeled"):
+        """Doc."""
+
+        if self.mode != "write":
+            raise TypeError(f"You are attempting to write while mode={self.mode}!")
+
+        start_pos = self.file.tell()
+        self.notes.append(note)
+        self.start_pos_list.append(start_pos)
+        pickle.dump(obj, self.file, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def read(self):
+        """Doc."""
+
+        if self.mode != "read":
+            raise TypeError(f"You are attempting to read while mode={self.mode}!")
+
+        self.file.seek(self.start_pos_list[self.pos_idx])
+        self.pos_idx += 1
+        return pickle.load(self.file)
+
+
+def deep_stem_path(p: Path):
+    """Doc."""
+
+    p = Path(p.stem)
+    while True:
+        stemmed_p = Path(p.stem)
+        if stemmed_p != p:
+            p = stemmed_p
+        else:
+            return str(p)
+
+
+def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):
+    """Doc."""
+
+    return Path(fpath.parent) / f"{deep_stem_path(fpath)}{index_suffix}{''.join(fpath.suffixes)}"
 
 
 def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):

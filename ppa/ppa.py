@@ -201,7 +201,7 @@ class SampleGenerator:
     dct: Dictionary
     index_suffix: InitVar[str] = "_idx"
 
-    def __post_init__(self, index_suffix: str, start_pos_list: List[int]):
+    def __post_init__(self, start_pos_list: List[int], index_suffix: str):
         """Doc."""
 
         self.indexed_file = IndexedFile(self.fpath, "read", start_pos_list, index_suffix)
@@ -209,7 +209,7 @@ class SampleGenerator:
     #    def __repr__(self):
     #        return f"SampleGenerator(({(self.n_samples - self.offset):,} samples) fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
 
-    def __iter__(self):
+    def __iter__(self) -> TaggedDocument:
         """
         Iterate over samples in the data file.
         """
@@ -229,6 +229,21 @@ class SampleGenerator:
 
             except IndexError:
                 pass  # End of file
+
+    def __getitem__(self, pos_idx: int) -> TaggedDocument:
+        """Doc."""
+
+        with self.indexed_file as idx_input_file:
+            tagged_doc = idx_input_file.read_idx(pos_idx)
+
+        return tagged_doc
+
+    #        return self.indexed_file.read_idx(pos_idx)
+
+    def __len__(self):
+        """Doc."""
+
+        return len(self.indexed_file.start_pos_list)
 
 
 @dataclass
@@ -428,13 +443,11 @@ class CorpusProcessor:
 
         if labeled:
             # Sort the index into a dictionary
-            index_dict: Dict[str, List[int]] = {}
+            index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
             with gzip.open(file_idx_path, "rb") as idx_file:
                 while True:
                     try:
                         start_pos, note = pickle.load(idx_file)
-                        if note not in index_dict:
-                            index_dict[note] = []
                         index_dict[note].append(start_pos)
                     except EOFError:
                         break

@@ -69,6 +69,24 @@ class IndexedFile:
         self.pos_idx += 1
         return pickle.load(self.file)
 
+    def read_idx(self, pos_idx: int):
+        """Doc."""
+
+        if self.mode != "read":
+            raise TypeError(f"You are attempting to read while mode={self.mode}!")
+
+        self.file.seek(self.start_pos_list[pos_idx])
+        return pickle.load(self.file)
+
+
+#        print("self.start_pos_list[pos_idx]: ", self.start_pos_list[pos_idx]) # TESTESTEST
+#        with gzip.open(self.fpath, "rb") as file:
+#            file.seek(0)
+#            file.seek(self.start_pos_list[pos_idx])
+#            obj = pickle.load(self.file)
+#
+#        return obj
+
 
 def deep_stem_path(p: Path):
     """Doc."""

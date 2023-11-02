@@ -23,6 +23,8 @@
 # # %reload_ext autoreload
 # # %autoreload 2
 
+from winsound import Beep
+
 # %% [markdown]
 # # The General Idea
 #
@@ -84,7 +86,7 @@ policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "REA
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
 # TESTEST - use only N paths!
-N_PATHS = 10_000
+N_PATHS = 1_000
 print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
 policy_paths = policy_paths[:N_PATHS]
 
@@ -95,8 +97,8 @@ policy_paths = policy_paths[:N_PATHS]
 from ppa.utils import timer
 from ppa.ppa import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 SEED = 42
 MODEL_DIR_PATH = Path.cwd().parent / "models"
@@ -113,6 +115,8 @@ cp = CorpusProcessor(
 
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
 cp.process(force=SHOULD_REPROCESS)
+
+Beep(1000, 500)
 
 # %% [markdown]
 # # 2. Preliminary EDA
@@ -213,6 +217,7 @@ for tagged_doc in cp.generate_samples(n_samples=N):
 # First, let's split the data to train/test sets
 
 # %%
+# N = cp.total_samples
 N = cp.total_samples // 10
 TEST_FRAC = 0.2
 train_data, test_data = cp.generate_train_test_sets(n_samples=N, test_frac=TEST_FRAC)
@@ -229,8 +234,8 @@ from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 # define save/load path
 MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
 
-# SHOULD_RETRAIN = True
-SHOULD_RETRAIN = False
+SHOULD_RETRAIN = True
+# SHOULD_RETRAIN = False
 
 if not SHOULD_RETRAIN:
     # load the last trained model
@@ -280,8 +285,7 @@ else:
 # It is worth mentioning that while purposfully attempting to overfit a small subset of 1000 documents and using a complex model (increased vector size), I was only able to reach about 80% - I attribute this to noise in the training data.
 
 # %%
-import collections
-from winsound import Beep
+from collections import Counter
 
 if SHOULD_RETRAIN:
     model = unsupervised_model
@@ -317,7 +321,7 @@ if SHOULD_RETRAIN:
         second_ranks.append(sims[1])
     print(" Done.")
 
-    counter = collections.Counter(ranks)
+    counter = Counter(ranks)
     print("counter: ", counter)
 
     # Done
@@ -447,7 +451,8 @@ data_loader = ToSDRDataLoader()
 #     force_extract=FORCE_EXT,
 #     force_transform=FORCE_TRANS,
 # )
-ratings_df = pd.DataFrame()  # TESTESTEST - to shut mypy up
+ratings_df = pd.DataFrame()  # TESTESTEST - to shut mypy up\
+raise ValueError("Uncomment the 'await'!!!")
 
 Beep(1000, 500)
 print("Done.")
@@ -529,7 +534,17 @@ with Plotter() as ax:
 # ### 5.2.3 Visualizing Labeled Data Using Unsupervised Model
 # Let's visualize the all labeled data over the unsupervised model we have trained.
 #
-# First, let's infer vectors for all the policies for which we have labels:
+# First, let's update the corpus with labeled data, and save it separately:
+
+# %%
+SHOULD_FORCE_LABELING = True
+# SHOULD_FORCE_LABELING = False
+
+url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
+cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
+
+# %% [markdown]
+# Next, let's infer vectors for all the policies for which we have labels:
 
 # %%
 from ppa.utils import get_file_index_path
@@ -539,18 +554,17 @@ import pickle
 
 labeled_corpus_index_path = get_file_index_path(cp.labeled_corpus_path)
 
-index_dict: Dict[str, List[int]] = {}
+index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
 with gzip.open(labeled_corpus_index_path, "rb") as idx_file:
     while True:
         try:
             start_pos, note = pickle.load(idx_file)
-            if note not in index_dict:
-                index_dict[note] = []
             index_dict[note].append(start_pos)
         except EOFError:
             break
 
 labeled_start_pos = index_dict["good"] + index_dict["bad"]
+print(f"{len(labeled_start_pos)} labeled policies indexed (good + bad)")
 
 # %%
 from ppa.display import Plotter, display_dim_reduction
@@ -558,8 +572,6 @@ from ppa.ppa import SampleGenerator
 
 # define the model
 model = unsupervised_model
-
-corpus = cp.generate_samples()
 
 print("Gathering all rated policies... ", end="")
 # labeled_policies = [
@@ -623,16 +635,6 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # # WIP: Retrain/Update the Model with Some Labeled Data (Semi-Supervised)
-
-# %% [markdown]
-# Update the corpus with labeled data. Save separately.
-
-# %%
-# SHOULD_FORCE_LABELING = True
-SHOULD_FORCE_LABELING = False
-
-url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
-cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
 
 # %% [markdown]
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.

@@ -642,7 +642,7 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # %%
 train_set, test_set = cp.generate_train_test_sets(n_samples=1000, labeled=True)
 
-# TEST - check percentages in train/test splits
+# # TEST - check percentages in train/test splits
 # from collections import Counter
 
 # print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in train_set]))

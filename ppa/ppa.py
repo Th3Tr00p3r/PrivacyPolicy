@@ -216,16 +216,10 @@ class SampleGenerator:
 
         with self.indexed_file as idx_input_file:
             try:
+                # TODO: implement a 'read_all' method and switch to 'yield from' istead of the while loop (use StopIteration
                 while True:
                     # Deserialize and yield one document at a time
-                    tagged_doc = idx_input_file.read()
-                    try:
-                        yield TaggedDocument(
-                            [self.dct[id] for id in tagged_doc.words], tagged_doc.tags
-                        )
-                    except KeyError:
-                        # words are tokens, not token IDs
-                        yield tagged_doc
+                    yield idx_input_file.read()
 
             except IndexError:
                 pass  # End of file
@@ -287,7 +281,6 @@ class CorpusProcessor:
         # file paths:
         self.dict_path = self.save_dir_path / "dictionary.pkl"
         self.corpus_path = self.save_dir_path / "corpus.pkl.gz"
-        self.id_corpus_path = self.save_dir_path / "corpus_id.pkl.gz"
         self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.pkl.gz"
 
         # Shuffle the paths (reproducible with seed)
@@ -338,37 +331,9 @@ class CorpusProcessor:
                         idx_output_file.write(tagged_doc)
                 print(" - Done.")
 
-            #            # keep path to index file
-            #            self.unlabeled_idx_fpath = idx_output_file.idx_fpath
-
             print("Saving Dictionary... ", end="")
             self.dct.save(str(self.dict_path))
             print("Done.")
-
-            # ID corpus
-            if force:
-                print(
-                    f"Re-Processing and saving {self.total_samples:,} TaggedDocument objects to disk: ",
-                    end="",
-                )
-                with IndexedFile(self.id_corpus_path, "write") as idx_output_file:
-                    # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
-                    for fidx, tagged_doc in enumerate(self.generate_samples(self.corpus_path)):
-                        # Track progress visually
-                        if not (fidx + 1) % (self.total_samples // 100):
-                            print("o", end="")
-                        # Open and process each file
-                        tagged_id_doc = TaggedDocument(
-                            words=self.dct.doc2idx(tagged_doc.words), tags=tagged_doc.tags
-                        )
-                        # Serialize the document tokens using pickle and write to the compressed file
-                        idx_output_file.write(tagged_id_doc)
-                    print(" - Done.")
-                # Delete the tokenized corpus
-                (self.corpus_path).unlink()
-
-    #                # keep path to index file
-    #                self.unlabeled_idx_fpath = idx_output_file.idx_fpath
 
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
@@ -397,18 +362,12 @@ class CorpusProcessor:
                         while len(tagged_doc.tags) > 2:
                             tagged_doc.tags.pop()
 
-                    # back to IDs
-                    tagged_id_doc = TaggedDocument(
-                        words=self.dct.doc2idx(tagged_doc.words), tags=tagged_doc.tags
-                    )
                     # Serialize the document tokens using pickle and write to the compressed file
                     try:
-                        idx_output_file.write(tagged_id_doc, tagged_id_doc.tags[1])
+                        idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
                     except IndexError:
-                        idx_output_file.write(tagged_id_doc)
+                        idx_output_file.write(tagged_doc)
 
-                # keep index file path
-                self.labeled_idx_fpath = idx_output_file.idx_fpath
                 print(" - Done.")
 
     @timer(1000)
@@ -434,7 +393,7 @@ class CorpusProcessor:
         if labeled:
             fpath = fpath or self.labeled_corpus_path
         else:
-            fpath = fpath or self.id_corpus_path
+            fpath = fpath or self.corpus_path
 
         file_idx_path = get_file_index_path(fpath)
 

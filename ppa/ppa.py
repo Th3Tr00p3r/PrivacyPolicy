@@ -1,8 +1,6 @@
-import gzip
 import json
 import logging
 import logging.config
-import pickle
 import random
 import re
 from contextlib import suppress
@@ -220,22 +218,23 @@ class SampleGenerator:
         # indexed (for reading with external shuffling)
         if self.start_pos_list is not None:
             indexed_file = self.indexed_file()
-            yield from indexed_file.read_all()
+            for deserialized_obj in indexed_file.read_all():
+                yield TaggedDocument(*deserialized_obj)
 
         # regular (for processing/writing - no need to shuffle)
         else:
-            with gzip.open(self.fpath, "rb") as file:
+            with open(self.fpath, "r") as file:
                 try:
                     while True:
-                        yield pickle.load(file)
-                except EOFError:
+                        yield TaggedDocument(*json.loads(file.readline()))
+                except json.JSONDecodeError:
                     pass
 
     def __getitem__(self, pos_idx: int) -> TaggedDocument:
         """Doc."""
 
         if self.start_pos_list is not None:
-            with self.indexed_file(should_shufle=False) as idx_input_file:
+            with self.indexed_file(should_shuffle=False) as idx_input_file:
                 return idx_input_file.read_idx(pos_idx)
         else:
             raise RuntimeError("Unable to use __getitem__ - not using indexed file")
@@ -289,8 +288,8 @@ class CorpusProcessor:
 
         # file paths:
         self.dict_path = self.save_dir_path / "dictionary.pkl"
-        self.corpus_path = self.save_dir_path / "corpus.pkl.gz"
-        self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.pkl.gz"
+        self.corpus_path = self.save_dir_path / "corpus.json"
+        self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.json"
 
         # Shuffle the paths (reproducible with seed)
         if self.seed is not None:
@@ -413,12 +412,12 @@ class CorpusProcessor:
         if labeled:
             # Sort the index into a dictionary
             index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
-            with gzip.open(file_idx_path, "rb") as idx_file:
+            with open(file_idx_path, "r") as idx_file:
                 while True:
                     try:
-                        start_pos, note = pickle.load(idx_file)
+                        start_pos, note = json.loads(idx_file.readline())
                         index_dict[note].append(start_pos)
-                    except EOFError:
+                    except json.JSONDecodeError:
                         break
 
             # Shuffle the index (optional) - this means choosing different train/test sets
@@ -467,12 +466,12 @@ class CorpusProcessor:
             if shuffled:
                 # Get the entire file index as a list
                 index_list = []
-                with gzip.open(file_idx_path, "rb") as idx_file:
+                with open(file_idx_path, "r") as idx_file:
                     while True:
                         try:
-                            start_pos, _ = pickle.load(idx_file)
+                            start_pos, _ = json.loads(idx_file.readline())
                             index_list.append(start_pos)
-                        except EOFError:
+                        except json.JSONDecodeError:
                             break
 
                 # Shuffle the index (optional) - this means choosing different train/test sets

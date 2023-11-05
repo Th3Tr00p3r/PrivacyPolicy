@@ -91,10 +91,10 @@ print("Loading all privacy policy paths to memory... ", end="")
 policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
-# # TESTEST - use only N paths!
-# N_PATHS = 1_000
-# print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
-# policy_paths = policy_paths[:N_PATHS]
+# TESTEST - use only N paths!
+N_PATHS = 10_000
+print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
+policy_paths = policy_paths[:N_PATHS]
 
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
@@ -103,8 +103,8 @@ print(f"Found {len(policy_paths):,} privacy policy files.")
 from ppa.utils import timer
 from ppa.ppa import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 SEED = 42
 MODEL_DIR_PATH = Path.cwd().parent / "models"
@@ -131,7 +131,7 @@ Beep(1000, 500)
 # Let's take a look at the distribution of PP lengths (number of tokens). It might prove wise to trim the ends of this distribution, as those very short or very long PPs might not represent the general case, and are definitely outliers in the dataset:
 
 # %%
-N = cp.total_samples // 1000
+N = cp.total_samples // 10
 pp_lengths = np.array(
     [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=N, shuffled=True)]
 )
@@ -241,8 +241,8 @@ from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 # define save/load path
 MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
 
-# SHOULD_RETRAIN = True
-SHOULD_RETRAIN = False
+SHOULD_RETRAIN = True
+# SHOULD_RETRAIN = False
 
 if not SHOULD_RETRAIN:
     # load the last trained model
@@ -349,24 +349,24 @@ else:
 # ## 4.1 Inferring Vectors for Test Data
 
 # %%
-# from ppa.display import Plotter, display_dim_reduction
+from ppa.display import Plotter, display_dim_reduction
 
-# model = unsupervised_model
+model = unsupervised_model
 
-# N_samples = 1000
+N_samples = 1000
 
-# # Infer document vectors for the test data
-# print("Inferring vectors for test documents... ", end="")
-# document_vectors = [
-#     model.infer_vector(doc.words) for idx, doc in enumerate(test_data) if idx < N_samples
-# ]
-# print("Done.")
+# Infer document vectors for the test data
+print("Inferring vectors for test documents... ", end="")
+document_vectors = [
+    model.infer_vector(doc.words) for idx, doc in enumerate(test_data) if idx < N_samples
+]
+print("Done.")
 
-# # Convert document vectors to a numpy array
-# document_vectors_array = np.array(document_vectors)
+# Convert document vectors to a numpy array
+document_vectors_array = np.array(document_vectors)
 
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # ## 4.2 Visualizing the Inferred Documents
@@ -375,33 +375,41 @@ else:
 # PCA
 
 # %%
-# from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA
 
-# # Perform PCA to reduce dimensionality for visualization
-# pca = PCA(n_components=2)  # You can adjust the number of components as needed
-# pca_result = pca.fit_transform(document_vectors_array)
+# Perform PCA to reduce dimensionality for visualization
+pca = PCA(n_components=2)  # You can adjust the number of components as needed
+pca_result = pca.fit_transform(document_vectors_array)
 
-# annots = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
-# display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
+annots = [
+    tagged_doc.tags[0]
+    for idx, tagged_doc in enumerate(test_data)
+    if (idx < N_samples) and (idx % 10 == 0)
+]
+display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
 # Let's try t-SNE as well
 
 # %%
-# from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE
 
-# tsne = TSNE(
-#     n_components=2,
-#     perplexity=15,
-#     learning_rate=200,
-#     n_iter=1000,
-#     n_iter_without_progress=500,
-#     random_state=SEED,
-# )
-# tsne_result = tsne.fit_transform(document_vectors_array)
+tsne = TSNE(
+    n_components=2,
+    perplexity=15,
+    learning_rate=200,
+    n_iter=1000,
+    n_iter_without_progress=500,
+    random_state=SEED,
+)
+tsne_result = tsne.fit_transform(document_vectors_array)
 
-# annots = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
-# display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
+annots = [
+    tagged_doc.tags[0]
+    for idx, tagged_doc in enumerate(test_data)
+    if (idx < N_samples) and (idx % 10 == 0)
+]
+display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
 # We need to get some clue as to what the above means. Let's try gathering several "good" and "bad" privacy policies, and see where they stand in the PCA picture.
@@ -542,8 +550,8 @@ with Plotter() as ax:
 # First, let's update the corpus with labeled data, and save it separately:
 
 # %%
-# SHOULD_FORCE_LABELING = True
-SHOULD_FORCE_LABELING = False
+SHOULD_FORCE_LABELING = True
+# SHOULD_FORCE_LABELING = False
 
 url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
 cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
@@ -554,18 +562,17 @@ cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
 # %%
 from ppa.utils import get_file_index_path
 from typing import Dict, List
-import gzip
-import pickle
+import json
 
 labeled_corpus_index_path = get_file_index_path(cp.labeled_corpus_path)
 
 index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
-with gzip.open(labeled_corpus_index_path, "rb") as idx_file:
+with open(labeled_corpus_index_path, "r") as idx_file:
     while True:
         try:
-            start_pos, note = pickle.load(idx_file)
+            start_pos, note = json.loads(idx_file.readline())
             index_dict[note].append(start_pos)
-        except EOFError:
+        except json.JSONDecodeError:
             break
 
 labeled_start_pos = index_dict["good"] + index_dict["bad"]
@@ -582,7 +589,10 @@ print("Gathering all rated policies... ", end="")
 # labeled_policies = [
 #     tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in ratings_df["tag"].tolist()
 # ]
-labeled_policies = SampleGenerator(cp.labeled_corpus_path, labeled_start_pos)
+# labeled_policies = SampleGenerator(cp.labeled_corpus_path, labeled_start_pos)
+labeled_policies = [
+    tagged_doc for tagged_doc in SampleGenerator(cp.labeled_corpus_path) if len(tagged_doc.tags) > 1
+]
 
 print("Done.")
 
@@ -601,38 +611,38 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # And now, let's visualize them, with only the "good" policies annotated by URL:
 
 # %%
-# from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA
 
-# # Perform PCA to reduce dimensionality for visualization
-# pca = PCA(n_components=2)  # You can adjust the number of components as needed
-# pca_result = pca.fit_transform(document_vectors_array)
+# Perform PCA to reduce dimensionality for visualization
+pca = PCA(n_components=2)  # You can adjust the number of components as needed
+pca_result = pca.fit_transform(document_vectors_array)
 
-# annots = [
-#     tagged_doc.tags[0]
-#     for tagged_doc in labeled_policies
-#     if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-# ]
-# display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
+annots = [
+    tagged_doc.tags[0]
+    for tagged_doc in labeled_policies
+    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+]
+display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
 
 # %%
-# from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE
 
-# tsne = TSNE(
-#     n_components=2,
-#     perplexity=15,
-#     learning_rate=200,
-#     n_iter=1000,
-#     n_iter_without_progress=500,
-#     random_state=SEED,
-# )
-# tsne_result = tsne.fit_transform(document_vectors_array)
+tsne = TSNE(
+    n_components=2,
+    perplexity=15,
+    learning_rate=200,
+    n_iter=1000,
+    n_iter_without_progress=500,
+    random_state=SEED,
+)
+tsne_result = tsne.fit_transform(document_vectors_array)
 
-# annots = [
-#     tagged_doc.tags[0]
-#     for tagged_doc in labeled_policies
-#     if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-# ]
-# display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
+annots = [
+    tagged_doc.tags[0]
+    for tagged_doc in labeled_policies
+    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
+]
+display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
 # So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model does not capture what separates "good"/"bad" policies.

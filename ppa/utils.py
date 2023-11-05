@@ -1,8 +1,7 @@
 import asyncio
 import functools
-import gzip
+import json
 import logging
-import pickle
 import random
 import time
 from dataclasses import InitVar, dataclass, field
@@ -20,7 +19,7 @@ class IndexedFile:
     mode: str
     start_pos_list: List[int] = field(default_factory=lambda: [0])
     index_suffix: InitVar[str] = "_idx"
-    should_shufle: bool = True
+    should_shuffle: bool = True
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -34,13 +33,13 @@ class IndexedFile:
 
     def __enter__(self):
         if self.mode == "read":
-            self.file = gzip.open(self.fpath, "rb")
+            self.file = open(self.fpath, "r")
             self.pos_idx = 0  # keep track of the file position index
-            if self.should_shufle:
+            if self.should_shuffle:
                 # shuffle each time entered
                 random.shuffle(self.start_pos_list)
         elif self.mode == "write":
-            self.file = gzip.open(self.fpath, "wb")
+            self.file = open(self.fpath, "w")
             self.notes = []
 
         return self
@@ -52,9 +51,10 @@ class IndexedFile:
         self.file.close()
         if self.mode == "write":
             # create the index file from the collected lists (start positions and notes)
-            with gzip.open(self.idx_fpath, "wb") as idx_file:
+            with open(self.idx_fpath, "w") as idx_file:
                 for start_pos, note in zip(self.start_pos_list, self.notes):
-                    pickle.dump((start_pos, note), idx_file, protocol=pickle.HIGHEST_PROTOCOL)
+                    json.dump((start_pos, note), idx_file)
+                    idx_file.write("\n")
 
     def write(self, obj, note: str = "unlabeled"):
         """Doc."""
@@ -65,7 +65,8 @@ class IndexedFile:
         start_pos = self.file.tell()
         self.notes.append(note)
         self.start_pos_list.append(start_pos)
-        pickle.dump(obj, self.file, protocol=pickle.HIGHEST_PROTOCOL)
+        json.dump(obj, self.file)
+        self.file.write("\n")
 
     def read(self):
         """Doc."""
@@ -75,7 +76,7 @@ class IndexedFile:
 
         self.file.seek(self.start_pos_list[self.pos_idx])
         self.pos_idx += 1
-        return pickle.load(self.file)
+        return json.loads(self.file.readline())
 
     def read_idx(self, pos_idx: int):
         """Doc."""
@@ -84,36 +85,24 @@ class IndexedFile:
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
         self.file.seek(self.start_pos_list[pos_idx])
-        return pickle.load(self.file)
+        return json.loads(self.file.readline())
 
     def read_all(self):
         """Doc."""
 
-        if self.should_shufle:
+        if self.should_shuffle:
             random.shuffle(self.start_pos_list)
 
-        with gzip.open(self.fpath, "rb") as file:
+        with open(self.fpath, "r") as file:
             for pos in self.start_pos_list:
                 file.seek(pos)
-                yield pickle.load(file)
-
-
-def deep_stem_path(p: Path):
-    """Doc."""
-
-    p = Path(p.stem)
-    while True:
-        stemmed_p = Path(p.stem)
-        if stemmed_p != p:
-            p = stemmed_p
-        else:
-            return str(p)
+                yield json.loads(file.readline())
 
 
 def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):
     """Doc."""
 
-    return Path(fpath.parent) / f"{deep_stem_path(fpath)}{index_suffix}{''.join(fpath.suffixes)}"
+    return Path(fpath.parent) / f"{fpath.stem}{index_suffix}{''.join(fpath.suffixes)}"
 
 
 def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):

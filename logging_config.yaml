@@ -22,7 +22,7 @@ handlers:
         backupCount: 10
     notebook:
         class: logging.StreamHandler
-        level: INFO  # Adjust the log level as needed (INFO, DEBUG, etc.)
+        level: INFO
         formatter: console_frmt
 root:
     level: DEBUG

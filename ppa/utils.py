@@ -3,6 +3,7 @@ import functools
 import gzip
 import logging
 import pickle
+import random
 import time
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
@@ -17,8 +18,9 @@ class IndexedFile:
 
     fpath: Path
     mode: str
-    start_pos_list: List[int] = field(default_factory=list)
+    start_pos_list: List[int] = field(default_factory=lambda: [0])
     index_suffix: InitVar[str] = "_idx"
+    should_shufle: bool = True
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -34,19 +36,25 @@ class IndexedFile:
         if self.mode == "read":
             self.file = gzip.open(self.fpath, "rb")
             self.pos_idx = 0  # keep track of the file position index
+            if self.should_shufle:
+                # shuffle each time entered
+                random.shuffle(self.start_pos_list)
         elif self.mode == "write":
             self.file = gzip.open(self.fpath, "wb")
-            self.index_file = gzip.open(self.idx_fpath, "wb")
             self.notes = []
 
         return self
 
     def __exit__(self, *args):
+        """Doc."""
+
+        # close the data file
         self.file.close()
         if self.mode == "write":
-            for start_pos, note in zip(self.start_pos_list, self.notes):
-                pickle.dump((start_pos, note), self.index_file, protocol=pickle.HIGHEST_PROTOCOL)
-            self.index_file.close()
+            # create the index file from the collected lists (start positions and notes)
+            with gzip.open(self.idx_fpath, "wb") as idx_file:
+                for start_pos, note in zip(self.start_pos_list, self.notes):
+                    pickle.dump((start_pos, note), idx_file, protocol=pickle.HIGHEST_PROTOCOL)
 
     def write(self, obj, note: str = "unlabeled"):
         """Doc."""
@@ -78,14 +86,16 @@ class IndexedFile:
         self.file.seek(self.start_pos_list[pos_idx])
         return pickle.load(self.file)
 
+    def read_all(self):
+        """Doc."""
 
-#        print("self.start_pos_list[pos_idx]: ", self.start_pos_list[pos_idx]) # TESTESTEST
-#        with gzip.open(self.fpath, "rb") as file:
-#            file.seek(0)
-#            file.seek(self.start_pos_list[pos_idx])
-#            obj = pickle.load(self.file)
-#
-#        return obj
+        if self.should_shufle:
+            random.shuffle(self.start_pos_list)
+
+        with gzip.open(self.fpath, "rb") as file:
+            for pos in self.start_pos_list:
+                file.seek(pos)
+                yield pickle.load(file)
 
 
 def deep_stem_path(p: Path):

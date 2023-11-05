@@ -7,6 +7,7 @@ import random
 import re
 from contextlib import suppress
 from dataclasses import InitVar, dataclass
+from functools import partial
 from pathlib import Path
 from typing import Dict, List
 from winsound import Beep
@@ -197,14 +198,16 @@ class SampleGenerator:
     """
 
     fpath: Path
-    start_pos_list: InitVar[List[int]]
-    dct: Dictionary
+    start_pos_list: List[int] = None
     index_suffix: InitVar[str] = "_idx"
 
-    def __post_init__(self, start_pos_list: List[int], index_suffix: str):
+    def __post_init__(self, index_suffix: str):
         """Doc."""
 
-        self.indexed_file = IndexedFile(self.fpath, "read", start_pos_list, index_suffix)
+        if self.start_pos_list is not None:
+            self.indexed_file = partial(
+                IndexedFile, self.fpath, "read", self.start_pos_list, index_suffix
+            )
 
     #    def __repr__(self):
     #        return f"SampleGenerator(({(self.n_samples - self.offset):,} samples) fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
@@ -214,30 +217,36 @@ class SampleGenerator:
         Iterate over samples in the data file.
         """
 
-        with self.indexed_file as idx_input_file:
-            try:
-                # TODO: implement a 'read_all' method and switch to 'yield from' istead of the while loop (use StopIteration
-                while True:
-                    # Deserialize and yield one document at a time
-                    yield idx_input_file.read()
+        # indexed (for reading with external shuffling)
+        if self.start_pos_list is not None:
+            indexed_file = self.indexed_file()
+            yield from indexed_file.read_all()
 
-            except IndexError:
-                pass  # End of file
+        # regular (for processing/writing - no need to shuffle)
+        else:
+            with gzip.open(self.fpath, "rb") as file:
+                try:
+                    while True:
+                        yield pickle.load(file)
+                except EOFError:
+                    pass
 
     def __getitem__(self, pos_idx: int) -> TaggedDocument:
         """Doc."""
 
-        with self.indexed_file as idx_input_file:
-            tagged_doc = idx_input_file.read_idx(pos_idx)
-
-        return tagged_doc
-
-    #        return self.indexed_file.read_idx(pos_idx)
+        if self.start_pos_list is not None:
+            with self.indexed_file(should_shufle=False) as idx_input_file:
+                return idx_input_file.read_idx(pos_idx)
+        else:
+            raise RuntimeError("Unable to use __getitem__ - not using indexed file")
 
     def __len__(self):
         """Doc."""
 
-        return len(self.indexed_file.start_pos_list)
+        try:
+            return len(self.start_pos_list)
+        except TypeError:
+            raise RuntimeError("Unable to get length - not using indexed file")
 
 
 @dataclass
@@ -352,8 +361,9 @@ class CorpusProcessor:
                 # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
                 for fidx, tagged_doc in enumerate(self.generate_samples()):
                     # Track progress visually
-                    if not (fidx + 1) % (self.total_samples // 100):
-                        print("o", end="")
+                    if not (fidx + 1) % (self.total_samples / 100):
+                        logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+
                     # add label if available in `tag_label_dict`
                     with suppress(KeyError):
                         # always insert after first tag (URL)
@@ -454,34 +464,36 @@ class CorpusProcessor:
 
         # all unlabeled
         else:
-            # Get the entire file index as a list
-            index_list = []
-            with gzip.open(file_idx_path, "rb") as idx_file:
-                while True:
-                    try:
-                        start_pos, _ = pickle.load(idx_file)
-                        index_list.append(start_pos)
-                    except EOFError:
-                        break
+            if shuffled:
+                # Get the entire file index as a list
+                index_list = []
+                with gzip.open(file_idx_path, "rb") as idx_file:
+                    while True:
+                        try:
+                            start_pos, _ = pickle.load(idx_file)
+                            index_list.append(start_pos)
+                        except EOFError:
+                            break
 
-            # create train/test file indices
-            train_start_positions = index_list[:n_train]
-            test_start_positions = index_list[n_train:n_samples]
+                # Shuffle the index (optional) - this means choosing different train/test sets
+                random.shuffle(index_list)
 
-        # shuffle the index - this means the training set is shuffled (might be the same set, but different order)
-        random.shuffle(train_start_positions)
-        random.shuffle(test_start_positions)
+                # create train/test file indices
+                train_start_positions = index_list[:n_train]
+                test_start_positions = index_list[n_train:n_samples]
+
+            # if shuffling isn't needed (such as when processing), no indexing is needed
+            else:
+                train_start_positions = None
+                test_start_positions = []
 
         # Initialize re-generators
-        #        print("[generate_train_test_sets] train_start_positions: ", train_start_positions) # TESTESTEST
-        train_sample_loader = SampleGenerator(fpath, train_start_positions, self.dct)
-        try:
-            test_sample_loader = SampleGenerator(fpath, test_start_positions, self.dct)
-        except ValueError:
-            # test_start_positions is empty - happens when `generate_samples` is called
-            test_sample_loader = None
-
-        return train_sample_loader, test_sample_loader
+        if not test_start_positions:
+            return SampleGenerator(fpath, train_start_positions)
+        else:
+            return SampleGenerator(fpath, train_start_positions), SampleGenerator(
+                fpath, test_start_positions
+            )
 
     def generate_samples(self, *args, **kwargs):
         """
@@ -494,8 +506,7 @@ class CorpusProcessor:
         """
 
         # Initialize and return re-generator
-        sample_gen, _ = self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
-        return sample_gen
+        return self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
 
     def _preprocess_document(self, fpath: Path):
         """

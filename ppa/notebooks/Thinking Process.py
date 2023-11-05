@@ -24,6 +24,12 @@
 # # %autoreload 2
 
 from winsound import Beep
+from ppa.utils import config_logging
+from ppa.display import Plotter
+import numpy as np
+
+# Configure logging
+config_logging()
 
 # %% [markdown]
 # # The General Idea
@@ -85,10 +91,10 @@ print("Loading all privacy policy paths to memory... ", end="")
 policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
-# TESTEST - use only N paths!
-N_PATHS = 1_000
-print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
-policy_paths = policy_paths[:N_PATHS]
+# # TESTEST - use only N paths!
+# N_PATHS = 1_000
+# print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
+# policy_paths = policy_paths[:N_PATHS]
 
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
@@ -97,8 +103,8 @@ policy_paths = policy_paths[:N_PATHS]
 from ppa.utils import timer
 from ppa.ppa import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 SEED = 42
 MODEL_DIR_PATH = Path.cwd().parent / "models"
@@ -125,11 +131,10 @@ Beep(1000, 500)
 # Let's take a look at the distribution of PP lengths (number of tokens). It might prove wise to trim the ends of this distribution, as those very short or very long PPs might not represent the general case, and are definitely outliers in the dataset:
 
 # %%
-from ppa.display import Plotter
-import numpy as np
-
-N = cp.total_samples // 10
-pp_lengths = np.array([len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=N)])
+N = cp.total_samples // 1000
+pp_lengths = np.array(
+    [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=N, shuffled=True)]
+)
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
 
@@ -138,6 +143,8 @@ with Plotter() as ax:
 
 print(f"PP length range: {pp_lengths.min()} - {pp_lengths.max():,} tokens")
 print(f"median PP length: {np.median(pp_lengths):,.0f} tokens")
+
+Beep(1000, 500)
 
 # %% [markdown]
 # Now, let's take a look at the `gensim.corpora.Dictionary` we created from the entire corpus:
@@ -220,7 +227,7 @@ for tagged_doc in cp.generate_samples(n_samples=N):
 # N = cp.total_samples
 N = cp.total_samples // 10
 TEST_FRAC = 0.2
-train_data, test_data = cp.generate_train_test_sets(n_samples=N, test_frac=TEST_FRAC)
+train_data, test_data = cp.generate_train_test_sets(n_samples=N, test_frac=TEST_FRAC, shuffled=True)
 print(f"Using {N:,} Samples ({N/cp.total_samples:.1%} of available samples, {TEST_FRAC:.1%} test).")
 
 # %% [markdown]
@@ -234,8 +241,8 @@ from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 # define save/load path
 MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
 
-SHOULD_RETRAIN = True
-# SHOULD_RETRAIN = False
+# SHOULD_RETRAIN = True
+SHOULD_RETRAIN = False
 
 if not SHOULD_RETRAIN:
     # load the last trained model
@@ -251,7 +258,8 @@ else:
         "vector_size": 300,
         "window": 5,
         "hs": 1,
-        "epochs": 10
+        "negative": 0,
+        "epochs": 10,
         #         "workers": mp.cpu_count(),
     }
     unsupervised_model = Doc2Vec(**unsupervised_model_kwargs)
@@ -259,6 +267,7 @@ else:
     # Build vocabulary
     print("Building vocabulary... ", end="")
     unsupervised_model.build_vocab(train_data)
+    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
     # Train the model
     print(f"Training unsupervised model... ", end="")
@@ -340,24 +349,24 @@ else:
 # ## 4.1 Inferring Vectors for Test Data
 
 # %%
-from ppa.display import Plotter, display_dim_reduction
+# from ppa.display import Plotter, display_dim_reduction
 
-model = unsupervised_model
+# model = unsupervised_model
 
-N_samples = 1000
+# N_samples = 1000
 
-# Infer document vectors for the test data
-print("Inferring vectors for test documents... ", end="")
-document_vectors = [
-    model.infer_vector(doc.words) for idx, doc in enumerate(test_data) if idx < N_samples
-]
-print("Done.")
+# # Infer document vectors for the test data
+# print("Inferring vectors for test documents... ", end="")
+# document_vectors = [
+#     model.infer_vector(doc.words) for idx, doc in enumerate(test_data) if idx < N_samples
+# ]
+# print("Done.")
 
-# Convert document vectors to a numpy array
-document_vectors_array = np.array(document_vectors)
+# # Convert document vectors to a numpy array
+# document_vectors_array = np.array(document_vectors)
 
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# # Beep when done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # ## 4.2 Visualizing the Inferred Documents
@@ -372,7 +381,7 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # pca = PCA(n_components=2)  # You can adjust the number of components as needed
 # pca_result = pca.fit_transform(document_vectors_array)
 
-# annots = [tagged_doc.tags[0] for idx, doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
+# annots = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
 # display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
@@ -391,7 +400,7 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # )
 # tsne_result = tsne.fit_transform(document_vectors_array)
 
-# annots = [tagged_doc.tags[0] for idx, doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
+# annots = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(test_data) if (idx < N_samples) and (idx % 10 == 0)]
 # display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
 
 # %% [markdown]
@@ -426,7 +435,6 @@ print(f"{len(tags):,} tags obtained.")
 # %%
 import asyncio
 from ppa.ppa import ToSDRDataLoader
-from ppa.utils import config_logging
 import pandas as pd
 
 # get all URLs for which I have PPs
@@ -438,9 +446,6 @@ FORCE_EXT = False
 
 # FORCE_TRANS = True
 FORCE_TRANS = False
-
-# Configure logging
-config_logging()
 
 # Instantiate data-loading object
 data_loader = ToSDRDataLoader()
@@ -537,8 +542,8 @@ with Plotter() as ax:
 # First, let's update the corpus with labeled data, and save it separately:
 
 # %%
-SHOULD_FORCE_LABELING = True
-# SHOULD_FORCE_LABELING = False
+# SHOULD_FORCE_LABELING = True
+SHOULD_FORCE_LABELING = False
 
 url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
 cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
@@ -577,12 +582,12 @@ print("Gathering all rated policies... ", end="")
 # labeled_policies = [
 #     tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in ratings_df["tag"].tolist()
 # ]
-labeled_policies = SampleGenerator(cp.labeled_corpus_path, labeled_start_pos, cp.dct)
+labeled_policies = SampleGenerator(cp.labeled_corpus_path, labeled_start_pos)
 
 print("Done.")
 
 # Infer document vectors for the test data
-print("Inferring vectors for test documents... ", end="")
+print("Inferring vectors for labeled policies... ", end="")
 document_vectors = [model.infer_vector(doc.words) for idx, doc in enumerate(labeled_policies)]
 print("Done.")
 
@@ -640,15 +645,18 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
 
 # %%
-train_set, test_set = cp.generate_train_test_sets(n_samples=1000, labeled=True)
+N = cp.total_samples // 10
+train_set, test_set = cp.generate_train_test_sets(
+    n_samples=N, test_frac=TEST_FRAC, labeled=True, shuffled=True
+)
 
-# # TEST - check percentages in train/test splits
-# from collections import Counter
+# TEST - check percentages in train/test splits
+from collections import Counter
 
-# print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in train_set]))
-# print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in test_set]))
+print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in train_set]))
+print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in test_set]))
 
-# Beep(1000, 500)
+Beep(1000, 500)
 
 # %% [markdown]
 # Re-train the model (now semi-supervised):

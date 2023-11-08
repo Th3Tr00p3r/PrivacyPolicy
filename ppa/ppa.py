@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
+from nltk.stem import WordNetLemmatizer
 
 from ppa.utils import IndexedFile, get_file_index_path, timer
 
@@ -328,7 +329,9 @@ class CorpusProcessor:
                     if not (fidx + 1) % (self.total_samples // 100):
                         print("o", end="")
                     # Open and process each file
-                    tokenized_doc = self._preprocess_document(fpath)
+                    tokenized_doc = self._preprocess_document_v2(
+                        fpath
+                    )  # TESTESTEST - was _preprocess_document
                     # Ignore very short/long documents
                     if self.min_tokens <= len(tokenized_doc) <= self.max_tokens:
                         # Add to the dictionary
@@ -517,10 +520,10 @@ class CorpusProcessor:
         Returns:
             List[str]: A list of preprocessed tokens from the document.
         """
-        # Read all but the header (probably not the most efficient method)
+        # Read all but the header
         with open(fpath, "r", encoding="utf-8") as f:
-            _, *doc_lines = f.read().split("\n")
-            doc = "\n".join(doc_lines)
+            _, *doc_lines = f.readlines()
+            doc = "\n".join(doc_lines)[2:]
 
         # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
         if self.url_pattern:
@@ -536,3 +539,64 @@ class CorpusProcessor:
             return gensim.parsing.preprocessing.remove_stopword_tokens(simp_proc_doc)
         else:
             return simp_proc_doc
+
+    def _preprocess_document_v2(self, fpath: Path, **kwargs):
+
+        # Read all but the header
+        with open(fpath, "r", encoding="utf-8") as f:
+            _, *doc_lines = f.readlines()
+            doc = "\n".join(doc_lines)[2:]
+
+        # Find and replace links with the text inside the square brackets
+        md_link_pattern = r"\[([^\]]+)\]\([^\)]+\)"
+        doc = re.sub(md_link_pattern, r"\1", doc)
+
+        # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
+        url_pattern = r"(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?\/[a-zA-Z0-9]{2,}|((https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?)|(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}(\.[a-zA-Z0-9]{2,})?"
+        doc = re.sub(url_pattern, "URL", doc)
+
+        # Tokenize the text
+        tokens = self._tokenize_text(doc, **kwargs)
+
+        return tokens
+
+    def _tokenize_text(self, text: str, filter_stopwords: bool = True, lemmatize: bool = True):
+        """Doc."""
+
+        # Use regular expressions to find hyphenated words and replace hyphens with " hyph "
+        text_with_hyph = re.sub(r"([A-Za-z0-9]+)-([A-Za-z0-9]+)", r"\1 hyph \2", text)
+
+        # Tokenize the text using simple_preprocess
+        tokens = gensim.utils.simple_preprocess(text_with_hyph, min_len=2, max_len=20)
+
+        # Lemmatize (optional)
+        if lemmatize:
+            # Initialize the WordNet lemmatizer
+            lemmatizer = WordNetLemmatizer()
+            # Lemmatize the tokens
+            tokens = [lemmatizer.lemmatize(token) for token in tokens]
+
+        # Merge tokens with "hyph" between them into hyphenated tokens
+        hyphenated_tokens = []
+        for i in range(len(tokens) - 2):
+            if tokens[i + 1] == "hyph":
+                hyphenated_token = tokens[i] + "-" + tokens[i + 2]
+                hyphenated_tokens.append(hyphenated_token)
+            elif tokens[i] == "hyph" or tokens[i - 1] == "hyph":
+                pass
+            else:
+                hyphenated_tokens.append(tokens[i])
+
+        # Remove stopwords (optional)
+        if filter_stopwords:
+            hyphenated_tokens = gensim.parsing.preprocessing.remove_stopword_tokens(
+                hyphenated_tokens
+            )
+
+        # Remove consecutive duplicates
+        tokens = [hyphenated_tokens[0]]
+        for i in range(1, len(hyphenated_tokens)):
+            if hyphenated_tokens[i] != hyphenated_tokens[i - 1]:
+                tokens.append(hyphenated_tokens[i])
+
+        return tokens

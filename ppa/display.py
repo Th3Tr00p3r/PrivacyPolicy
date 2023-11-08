@@ -139,9 +139,9 @@ class Plotter:
         [text.set_fontsize(self.fontsize) for text in [ax.title, ax.xaxis.label, ax.yaxis.label]]
 
 
-def display_scatter(arr2d: np.ndarray, labels=None, title="", annots: List[str] = None, **kwargs):
-    """Expects `arr2d` to be a 2D array-like with samples along the 0th dimension. `annots` is expected to be synchronized with `arr2d`"""
-
+def display_scatter(
+    arr2d: np.ndarray, labels: List[str] = None, annots: List[str] = None, title="", **kwargs
+):
     if arr2d.ndim != 2:
         raise ValueError("Must supply a 2D array! (sample rows, feature columns)")
 
@@ -154,13 +154,28 @@ def display_scatter(arr2d: np.ndarray, labels=None, title="", annots: List[str] 
 
     with Plotter(**kwargs) as ax:
         dim_slices = [col for col in arr2d.T]
-        scatter = ax.scatter(*dim_slices, c=labels, cmap="viridis")
-        if labels is not None and not isinstance(labels, str):  # if not a single color
-            ax.get_figure().colorbar(scatter, ax=ax)
+
+        if labels is not None:
+            unique_labels = list(set(labels))
+            colors = plt.cm.viridis(np.linspace(0, 1, len(unique_labels)))
+            for col_idx, (label, color) in enumerate(zip(unique_labels, colors)):
+                label_indices = [i for i, l in enumerate(labels) if l == label]
+                ax.scatter(
+                    *[dim_slice[label_indices] for dim_slice in dim_slices],
+                    6,
+                    color=color,
+                    label=label,
+                )
+            ax.legend()
+
+        else:
+            ax.scatter(*dim_slices, c=labels, cmap="viridis")
+
         ax.set_title(title)
 
-        for idx, annot in enumerate(annots):
-            ax.annotate(annot, (arr2d[idx, 0], arr2d[idx, 1]), fontsize=8)
+        if annots is not None:
+            for idx, annot in enumerate(annots):
+                ax.annotate(annot, (arr2d[idx, 0], arr2d[idx, 1]), fontsize=8)
 
 
 def display_dim_reduction(arr2d, name: str, **kwargs):

@@ -203,42 +203,30 @@ class SampleGenerator:
     def __post_init__(self, index_suffix: str):
         """Doc."""
 
-        if self.start_pos_list is not None:
-            self.indexed_file = partial(
-                IndexedFile, self.fpath, "read", self.start_pos_list, index_suffix
-            )
+        self.indexed_file = partial(
+            IndexedFile,
+            self.fpath,
+            "read",
+            self.start_pos_list,
+            index_suffix,
+        )
 
-    #    def __repr__(self):
-    #        return f"SampleGenerator(({(self.n_samples - self.offset):,} samples) fpath={self.fpath}, offset={self.offset}, id_corpus={self.id_corpus})"
+    def __repr__(self):
+        return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
 
     def __iter__(self) -> TaggedDocument:
         """
         Iterate over samples in the data file.
         """
 
-        # indexed (for reading with external shuffling)
-        if self.start_pos_list is not None:
-            indexed_file = self.indexed_file()
-            for deserialized_obj in indexed_file.read_all():
-                yield TaggedDocument(*deserialized_obj)
-
-        # regular (for processing/writing - no need to shuffle)
-        else:
-            with open(self.fpath, "r") as file:
-                try:
-                    while True:
-                        yield TaggedDocument(*json.loads(file.readline()))
-                except json.JSONDecodeError:
-                    pass
+        for deserialized_obj in self.indexed_file().read_all():
+            yield TaggedDocument(*deserialized_obj)
 
     def __getitem__(self, pos_idx: int) -> TaggedDocument:
         """Doc."""
 
-        if self.start_pos_list is not None:
-            with self.indexed_file(should_shuffle=False) as idx_input_file:
-                return idx_input_file.read_idx(pos_idx)
-        else:
-            raise RuntimeError("Unable to use __getitem__ - not using indexed file")
+        with self.indexed_file(should_shuffle=False) as idx_input_file:
+            return TaggedDocument(*idx_input_file.read_idx(pos_idx))
 
     def __len__(self):
         """Doc."""
@@ -246,7 +234,10 @@ class SampleGenerator:
         try:
             return len(self.start_pos_list)
         except TypeError:
-            raise RuntimeError("Unable to get length - not using indexed file")
+            len_ = 0
+            for _ in self.indexed_file().read_all():
+                len_ += 1
+            return len_
 
 
 @dataclass
@@ -551,9 +542,13 @@ class CorpusProcessor:
         md_link_pattern = r"\[([^\]]+)\]\([^\)]+\)"
         doc = re.sub(md_link_pattern, r"\1", doc)
 
+        # Find and replace email addresses
+        email_pattern = r"[^@ \t\r\n\v\f]+@[^@ \t\r\n\v\f]+\.[^@ \t\r\n\v\f]+"
+        doc = re.sub(email_pattern, "<EMAILADDR>", doc)
+
         # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
         url_pattern = r"(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?\/[a-zA-Z0-9]{2,}|((https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?)|(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}(\.[a-zA-Z0-9]{2,})?"
-        doc = re.sub(url_pattern, "URL", doc)
+        doc = re.sub(url_pattern, "<URL>", doc)
 
         # Tokenize the text
         tokens = self._tokenize_text(doc, **kwargs)
@@ -564,7 +559,7 @@ class CorpusProcessor:
         """Doc."""
 
         # Use regular expressions to find hyphenated words and replace hyphens with " hyph "
-        text_with_hyph = re.sub(r"([A-Za-z0-9]+)-([A-Za-z0-9]+)", r"\1 hyph \2", text)
+        text_with_hyph = re.sub(r"([A-Za-z]+)-([A-Za-z]+)", r"\1 hyph \2", text)
 
         # Tokenize the text using simple_preprocess
         tokens = gensim.utils.simple_preprocess(text_with_hyph, min_len=2, max_len=20)

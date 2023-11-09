@@ -19,17 +19,17 @@ class IndexedFile:
     mode: str
     start_pos_list: List[int] = field(default_factory=lambda: [0])
     index_suffix: InitVar[str] = "_idx"
-    should_shuffle: bool = True
+    should_shuffle: bool = None
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
 
-        if self.mode == "read" and not self.start_pos_list:
-            raise ValueError("Must supply 'start_pos_list' in 'read' mode!")
-
         if self.mode == "write":
             # build index file-path
             self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
+
+        elif self.should_shuffle is None and self.mode == "read":
+            self.should_shuffle = self.start_pos_list is not None
 
     def __enter__(self):
         if self.mode == "read":
@@ -68,35 +68,41 @@ class IndexedFile:
         json.dump(obj, self.file)
         self.file.write("\n")
 
-    def read(self):
-        """Doc."""
-
-        if self.mode != "read":
-            raise TypeError(f"You are attempting to read while mode={self.mode}!")
-
-        self.file.seek(self.start_pos_list[self.pos_idx])
-        self.pos_idx += 1
-        return json.loads(self.file.readline())
-
     def read_idx(self, pos_idx: int):
         """Doc."""
 
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
-        self.file.seek(self.start_pos_list[pos_idx])
-        return json.loads(self.file.readline())
+        if self.start_pos_list is not None:
+            self.file.seek(self.start_pos_list[pos_idx])
+            return json.loads(self.file.readline())
+
+        else:
+            for idx, deserialized_obj in enumerate(self.read_all()):
+                if idx == pos_idx:
+                    return deserialized_obj
 
     def read_all(self):
         """Doc."""
 
         if self.should_shuffle:
-            random.shuffle(self.start_pos_list)
+            if self.start_pos_list is None:
+                raise ValueError("Not instantiated with 'start_pos_list'!")
 
-        with open(self.fpath, "r") as file:
-            for pos in self.start_pos_list:
-                file.seek(pos)
-                yield json.loads(file.readline())
+            random.shuffle(self.start_pos_list)
+            with open(self.fpath, "r") as file:
+                for pos in self.start_pos_list:
+                    file.seek(pos)
+                    yield json.loads(file.readline())
+
+        else:
+            with open(self.fpath, "r") as file:
+                try:
+                    while True:
+                        yield json.loads(file.readline())
+                except json.JSONDecodeError:
+                    pass
 
 
 def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):

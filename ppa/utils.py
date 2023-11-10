@@ -19,7 +19,7 @@ class IndexedFile:
     mode: str
     start_pos_list: List[int] = field(default_factory=lambda: [0])
     index_suffix: InitVar[str] = "_idx"
-    should_shuffle: bool = None
+    shuffled: bool = None
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -28,14 +28,14 @@ class IndexedFile:
             # build index file-path
             self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
 
-        elif self.should_shuffle is None and self.mode == "read":
-            self.should_shuffle = self.start_pos_list is not None
+        elif self.shuffled is None and self.mode == "read":
+            self.shuffled = self.start_pos_list is not None
 
     def __enter__(self):
         if self.mode == "read":
             self.file = open(self.fpath, "r")
             self.pos_idx = 0  # keep track of the file position index
-            if self.should_shuffle:
+            if self.shuffled:
                 # shuffle each time entered
                 random.shuffle(self.start_pos_list)
         elif self.mode == "write":
@@ -86,7 +86,7 @@ class IndexedFile:
     def read_all(self):
         """Doc."""
 
-        if self.should_shuffle:
+        if self.shuffled:
             if self.start_pos_list is None:
                 raise ValueError("Not instantiated with 'start_pos_list'!")
 

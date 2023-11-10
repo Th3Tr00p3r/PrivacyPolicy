@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
+from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 from ppa.utils import IndexedFile, get_file_index_path, timer
@@ -225,7 +226,7 @@ class SampleGenerator:
     def __getitem__(self, pos_idx: int) -> TaggedDocument:
         """Doc."""
 
-        with self.indexed_file(should_shuffle=False) as idx_input_file:
+        with self.indexed_file(shuffled=False) as idx_input_file:
             return TaggedDocument(*idx_input_file.read_idx(pos_idx))
 
     def __len__(self):
@@ -248,7 +249,6 @@ class CorpusProcessor:
     Args:
         fpaths (List[Path]): A list of file paths to the documents.
         save_dir_path (Path): The path to the directory for saving processed data.
-        should_filter_stopwords (bool): Whether to filter out stopwords (default is False).
         url_pattern (str): A regular expression pattern for matching URLs (default is URL_PATTERN).
         email_pattern (str): A regular expression pattern for matching email addresses (default is EMAIL_PATTERN).
         max_tokens (int): The maximum number of tokens in a document (default is 100,000).
@@ -267,11 +267,6 @@ class CorpusProcessor:
 
     fpaths: List[Path]
     save_dir_path: Path
-    should_filter_stopwords: bool = False
-    url_pattern: str = URL_PATTERN
-    email_pattern: str = EMAIL_PATTERN
-    max_tokens: int = 100_000
-    min_tokens: int = 0
     seed: int = None
     dct: Dictionary = None
 
@@ -288,10 +283,10 @@ class CorpusProcessor:
             random.seed(self.seed)
 
     def __repr__(self):
-        return f"CorpusProcessor({len(self.fpaths)} docs, should_filter_stopwords={self.should_filter_stopwords}, seed={self.seed}, min_tokens={self.min_tokens}, max_tokens={self.max_tokens})"
+        return f"CorpusProcessor({len(self.fpaths)} docs, seed={self.seed}"
 
     @timer(1000)
-    def process(self, force=False, **kwargs):
+    def process(self, force=False, min_tokens=10, max_tokens=10_000, **kwargs):
         """
         Process the corpus and save it to the specified directory.
 
@@ -320,11 +315,9 @@ class CorpusProcessor:
                     if not (fidx + 1) % (self.total_samples // 100):
                         print("o", end="")
                     # Open and process each file
-                    tokenized_doc = self._preprocess_document_v2(
-                        fpath
-                    )  # TESTESTEST - was _preprocess_document
+                    tokenized_doc = self._preprocess_document(fpath, **kwargs)
                     # Ignore very short/long documents
-                    if self.min_tokens <= len(tokenized_doc) <= self.max_tokens:
+                    if min_tokens <= len(tokenized_doc) <= max_tokens:
                         # Add to the dictionary
                         self.dct.add_documents([tokenized_doc])
                         # Create a TaggedDocument instance
@@ -501,62 +494,100 @@ class CorpusProcessor:
         # Initialize and return re-generator
         return self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
 
-    def _preprocess_document(self, fpath: Path):
-        """
-        Preprocess a document from the corpus.
-
-        Args:
-            fpath (Path): The path to the document file.
-
-        Returns:
-            List[str]: A list of preprocessed tokens from the document.
-        """
-        # Read all but the header
-        with open(fpath, "r", encoding="utf-8") as f:
-            _, *doc_lines = f.readlines()
-            doc = "\n".join(doc_lines)[2:]
-
-        # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
-        if self.url_pattern:
-            doc = re.sub(self.url_pattern, "<URL>", doc)
-        if self.email_pattern:
-            doc = re.sub(self.email_pattern, "<EMAILADD>", doc)
-
-        # Tokenize the text
-        simp_proc_doc = gensim.utils.simple_preprocess(doc)
-
-        # Remove stopwords and return
-        if self.should_filter_stopwords:
-            return gensim.parsing.preprocessing.remove_stopword_tokens(simp_proc_doc)
-        else:
-            return simp_proc_doc
-
-    def _preprocess_document_v2(self, fpath: Path, **kwargs):
+    def _preprocess_document(self, fpath: Path, **kwargs):
 
         # Read all but the header
         with open(fpath, "r", encoding="utf-8") as f:
             _, *doc_lines = f.readlines()
             doc = "\n".join(doc_lines)[2:]
 
-        # Find and replace links with the text inside the square brackets
-        md_link_pattern = r"\[([^\]]+)\]\([^\)]+\)"
-        doc = re.sub(md_link_pattern, r"\1", doc)
+        # Initialize special tokens list
+        special_tokens = {}
+
+        # Define a regular expression pattern to match common date formats
+        date_pattern = r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{1,2},?\s\d{2,4}\b"
+        doc = re.sub(date_pattern, "datetoken", doc)
+        special_tokens["datetoken"] = "<DATE>"
+
+        # Find and replace email links with a special token
+        email_link_pattern = r"\[([^\]]*?)\]\(mailto:([^\)]*?)\)"
+        doc = re.sub(email_link_pattern, "emladdrstoken", doc)
+        special_tokens["emladdrstoken"] = "<EMAIL>"
+
+        # Find and replace links with the text inside the square brackets, and add a special token afterwards
+        md_link_pattern = r"\[([^\]]*?)\]\(.*?\)"
+        doc = re.sub(md_link_pattern, r"\1 urltoken", doc)
+        special_tokens["urltoken"] = "<URL>"
 
         # Find and replace email addresses
         email_pattern = r"[^@ \t\r\n\v\f]+@[^@ \t\r\n\v\f]+\.[^@ \t\r\n\v\f]+"
-        doc = re.sub(email_pattern, "<EMAILADDR>", doc)
+        doc = re.sub(email_pattern, "emladdrstoken", doc)
 
         # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
-        url_pattern = r"(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?\/[a-zA-Z0-9]{2,}|((https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?)|(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}(\.[a-zA-Z0-9]{2,})?"
-        doc = re.sub(url_pattern, "<URL>", doc)
+        url_pattern = (
+            r"(https?://)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+(\.[a-zA-Z]{2,})?(/[a-zA-Z0-9-]+)*/?"
+        )
+        doc = re.sub(url_pattern, "urltoken", doc)
 
         # Tokenize the text
-        tokens = self._tokenize_text(doc, **kwargs)
+        tokens = self._tokenize_text(doc, special_tokens, **kwargs)
 
         return tokens
 
-    def _tokenize_text(self, text: str, filter_stopwords: bool = True, lemmatize: bool = True):
+    def _tokenize_text(
+        self, text: str, specials_dict: Dict[str, str], filter_stopwords: bool = True, **kwargs
+    ):
         """Doc."""
+
+        hyphenated_tokens = self._get_hyphenated_tokens(text, **kwargs)
+
+        # TODO: Privacy terms / highlighting should be performed here!
+        # (before stopwords are removed, which might ruint things such as 'opt out/in')
+
+        # Remove stopwords (optional)
+        if filter_stopwords:
+            keep_list = ["not"]  # , 'but', 'if', 'and', 'or']
+            custom_stopwords = ["ii"]
+            stop_words = set(stopwords.words("english")) - set(keep_list) | set(custom_stopwords)
+            hyphenated_tokens = [token for token in hyphenated_tokens if token not in stop_words]
+
+        # Remove consecutive duplicates
+        tokens = [hyphenated_tokens[0]]
+        for i in range(1, len(hyphenated_tokens)):
+            if hyphenated_tokens[i] != hyphenated_tokens[i - 1]:
+                tokens.append(hyphenated_tokens[i])
+
+        # insert special tokens
+        text = " ".join(tokens)
+        for k, v in specials_dict.items():
+            text = re.sub(k, v, text)
+        tokens = text.split()
+
+        return tokens
+
+    def _get_hyphenated_tokens(self, text: str, lemmatize: bool = True, **kwargs):
+        """Doc."""
+
+        def unify_tokens(tokens, unifying_token):
+            result = []
+            i = 0
+
+            while i < len(tokens):
+                if tokens[i] == unifying_token:
+                    i += 1  # Skip the unifying token
+                    continue
+
+                unified_token = tokens[i]
+
+                while i + 2 < len(tokens) and tokens[i + 1] == unifying_token:
+                    # Continue building the unified token
+                    unified_token += "-" + tokens[i + 2]
+                    i += 2  # Skip the next token as it's already unified
+
+                result.append(unified_token)
+                i += 1
+
+            return result
 
         # Use regular expressions to find hyphenated words and replace hyphens with " hyph "
         text_with_hyph = re.sub(r"([A-Za-z]+)-([A-Za-z]+)", r"\1 hyph \2", text)
@@ -572,26 +603,4 @@ class CorpusProcessor:
             tokens = [lemmatizer.lemmatize(token) for token in tokens]
 
         # Merge tokens with "hyph" between them into hyphenated tokens
-        hyphenated_tokens = []
-        for i in range(len(tokens) - 2):
-            if tokens[i + 1] == "hyph":
-                hyphenated_token = tokens[i] + "-" + tokens[i + 2]
-                hyphenated_tokens.append(hyphenated_token)
-            elif tokens[i] == "hyph" or tokens[i - 1] == "hyph":
-                pass
-            else:
-                hyphenated_tokens.append(tokens[i])
-
-        # Remove stopwords (optional)
-        if filter_stopwords:
-            hyphenated_tokens = gensim.parsing.preprocessing.remove_stopword_tokens(
-                hyphenated_tokens
-            )
-
-        # Remove consecutive duplicates
-        tokens = [hyphenated_tokens[0]]
-        for i in range(1, len(hyphenated_tokens)):
-            if hyphenated_tokens[i] != hyphenated_tokens[i - 1]:
-                tokens.append(hyphenated_tokens[i])
-
-        return tokens
+        return unify_tokens(tokens, "hyph")

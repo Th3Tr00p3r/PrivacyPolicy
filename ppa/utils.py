@@ -3,9 +3,11 @@ import functools
 import json
 import logging
 import random
+import shutil
 import time
 from dataclasses import InitVar, dataclass, field
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Callable, List
 from winsound import Beep
 
@@ -23,10 +25,10 @@ class IndexedFile:
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
-
         if self.mode == "write":
             # build index file-path
             self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
+            self.temp_file = NamedTemporaryFile(mode="w", delete=False)
 
         elif self.shuffled is None and self.mode == "read":
             self.shuffled = self.start_pos_list is not None
@@ -39,17 +41,19 @@ class IndexedFile:
                 # shuffle each time entered
                 random.shuffle(self.start_pos_list)
         elif self.mode == "write":
-            self.file = open(self.fpath, "w")
+            self.file = self.temp_file
             self.notes = []
 
         return self
 
     def __exit__(self, *args):
         """Doc."""
-
         # close the data file
         self.file.close()
         if self.mode == "write":
+            # Move the temporary file to the supplied fpath
+            shutil.move(self.temp_file.name, self.fpath)
+
             # create the index file from the collected lists (start positions and notes)
             with open(self.idx_fpath, "w") as idx_file:
                 for start_pos, note in zip(self.start_pos_list, self.notes):
@@ -58,7 +62,6 @@ class IndexedFile:
 
     def write(self, obj, note: str = "unlabeled"):
         """Doc."""
-
         if self.mode != "write":
             raise TypeError(f"You are attempting to write while mode={self.mode}!")
 
@@ -70,7 +73,6 @@ class IndexedFile:
 
     def read_idx(self, pos_idx: int):
         """Doc."""
-
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
@@ -85,7 +87,6 @@ class IndexedFile:
 
     def read_all(self):
         """Doc."""
-
         if self.shuffled:
             if self.start_pos_list is None:
                 raise ValueError("Not instantiated with 'start_pos_list'!")

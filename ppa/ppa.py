@@ -4,6 +4,7 @@ import logging.config
 import random
 import re
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import InitVar, dataclass
 from functools import partial
 from pathlib import Path
@@ -286,7 +287,7 @@ class CorpusProcessor:
         return f"CorpusProcessor({len(self.fpaths)} docs, seed={self.seed}"
 
     @timer(1000)
-    def process(self, force=False, min_tokens=10, max_tokens=10_000, **kwargs):
+    def process(self, force=False, **kwargs):
         """
         Process the corpus and save it to the specified directory.
 
@@ -312,23 +313,73 @@ class CorpusProcessor:
                 # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
                 for fidx, fpath in enumerate(self.fpaths):
                     # Track progress visually
-                    if not (fidx + 1) % (self.total_samples // 100):
-                        print("o", end="")
+                    if not (fidx + 1) % (self.total_samples / 10):
+                        logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
                     # Open and process each file
                     tokenized_doc = self._preprocess_document(fpath, **kwargs)
-                    # Ignore very short/long documents
-                    if min_tokens <= len(tokenized_doc) <= max_tokens:
-                        # Add to the dictionary
-                        self.dct.add_documents([tokenized_doc])
-                        # Create a TaggedDocument instance
-                        tagged_doc = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
-                        # Serialize the document tokens using pickle and write to the compressed file
-                        idx_output_file.write(tagged_doc)
+                    # Add to the dictionary
+                    self.dct.add_documents([tokenized_doc])
+                    # Create a TaggedDocument instance
+                    tagged_doc = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
+                    # Serialize the document tokens using pickle and write to the compressed file
+                    idx_output_file.write(tagged_doc)
                 print(" - Done.")
+
+            # filter tokens
+            print(
+                "Filtering tokens and re-saving TaggedDocument objects to disk: ",
+                end="",
+            )
+            self._filter_tokens(**kwargs)
 
             print("Saving Dictionary... ", end="")
             self.dct.save(str(self.dict_path))
             print("Done.")
+
+    def _filter_tokens(
+        self,
+        n_below: int = 3,
+        no_above: float = 1.0,
+        min_tokens: int = 10,
+        max_tokens: int = 10_000,
+        **kwargs,
+    ):
+        """Doc."""
+
+        # filter words appearing in less then n_below documents, or more then above 'no_above' fraction of documents
+        fltrd_dct = deepcopy(self.dct)
+        fltrd_dct.filter_extremes(
+            no_below=n_below,
+            no_above=no_above,
+            # keep_n=1_000_000,
+            # keep_tokens=None
+        )
+
+        # re-initialize the Dictionary
+        self.dct = Dictionary()
+        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+            # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
+            for fidx, tagged_doc in enumerate(self.generate_samples()):
+                # Track progress visually
+                if not (fidx + 1) % (self.total_samples / 10):
+                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+
+                # remove tokens not in filtered Dictionary
+                filtered_tokens = [
+                    token_ for token_ in tagged_doc.words if fltrd_dct.token2id.get(token_)
+                ]
+                # Ignore very short/long documents
+                if min_tokens <= len(filtered_tokens) <= max_tokens:
+                    # Add to the dictionary
+                    self.dct.add_documents([filtered_tokens])
+                    tagged_doc = TaggedDocument(words=filtered_tokens, tags=tagged_doc.tags)
+
+                    # Serialize the document tokens using pickle and write to file
+                    # TODO: why do I need the 'note=tagged_doc.tags[1]' if it is contained in the tags?
+                    try:
+                        idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
+                    except IndexError:
+                        idx_output_file.write(tagged_doc)
 
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
@@ -347,7 +398,7 @@ class CorpusProcessor:
                 # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
                 for fidx, tagged_doc in enumerate(self.generate_samples()):
                     # Track progress visually
-                    if not (fidx + 1) % (self.total_samples / 100):
+                    if not (fidx + 1) % (self.total_samples / 10):
                         logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                     # add label if available in `tag_label_dict`
@@ -358,7 +409,8 @@ class CorpusProcessor:
                         while len(tagged_doc.tags) > 2:
                             tagged_doc.tags.pop()
 
-                    # Serialize the document tokens using pickle and write to the compressed file
+                    # Serialize the document tokens using pickle and write to file
+                    # TODO: why do I need the 'note=tagged_doc.tags[1]' if it is contained in the tags?
                     try:
                         idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
                     except IndexError:

@@ -91,15 +91,52 @@ policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "REA
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
 # # TESTEST - use only N paths!
-# N_PATHS = 100
+# N_PATHS = 10_000
 # print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
 # policy_paths = policy_paths[:N_PATHS]
 
 # %% [markdown]
+# # TODO: find strange tokens and take care of them. e.g:
+# ## 1) I noticed some tokens containing underscores '_' - these should not exist!
+# ## 2) I noticed some \<URL> tokens concatenated to some other word/token.
 # # TODO: implement a second processing step after Dictionary object is created, which should possibly contain:
-# ## 1) iterating over all documents, removing any tokens which appear only in them and only once.
-# ## 2) iterating over all documents, noting any tokens which appear only in them more than once and replacing them with a special token such as \<topic> or \<company>?..
-# ## 3) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
+# ## 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
+
+# %%
+# TEST
+
+# from copy import deepcopy
+
+# # get and check out token document counts (in how many documents each token appears)
+# id_doc_count_dict = dict(sorted({id_: count for id_, count in dct.dfs.items()}.items(), key=lambda x: x[1]))
+# token_doc_count_dict = {dct[id_]: count for id_, count in id_doc_count_dict.items()}
+
+# # consider tokens appearing in N or less documents
+# min_docs = 3
+# rare_doc_count_ids = [id_ for id_, count in id_doc_count_dict.items() if count <= min_docs]
+# rare_doc_count_tokens = [cp.dct[id_] for id_ in rare_doc_count_ids]
+
+# # get and check out collection counts for the rare doc-count tokens
+# comp_names_potential_ids = [id_ for id_ in rare_doc_count_ids if cp.dct.cfs[id_] >= id_doc_count_dict[id_] * 2]
+# comp_names_potential_tokens = [cp.dct[id_] for id_ in comp_names_potential_ids]
+
+# %%
+# print(
+#     f"Dictionary was created by processing {cp.dct.num_pos:,} tokens from a corpus of {cp.dct.num_docs:,} documents."
+# )
+# print(f"It contains {len(cp.dct):,} unique tokens.")
+# print(f"Each document, on average, contains {cp.dct.num_nnz // cp.dct.num_docs:,} unique tokens.")
+
+# %%
+# print(len(comp_names_potential_tokens))
+# comp_names_potential_tokens
+
+# %%
+# print(len(rare_doc_count_tokens))
+# rare_doc_count_tokens
+
+# %%
+# len(rare_doc_count_tokens)
 
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
@@ -107,8 +144,8 @@ print(f"Found {len(policy_paths):,} privacy policy files.")
 # %%
 from ppa.ppa import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 SEED = 42
 MODEL_DIR_PATH = Path.cwd().parent / "models"
@@ -132,11 +169,11 @@ cp.process(
 Beep(1000, 500)
 
 # %%
-# IDX = 3
+IDX = 3
 
-# sg = cp.generate_samples(shuffled=False)
-# print(sg[IDX].tags, len(sg[IDX].words))
-# " ".join(sg[IDX].words)
+sg = cp.generate_samples(shuffled=False)
+print(sg[IDX].tags, len(sg[IDX].words))
+" ".join(sg[IDX].words)
 
 # %% [markdown]
 # # 2. Preliminary EDA
@@ -225,207 +262,8 @@ for tagged_doc in cp.generate_samples(n_samples=N):
         break
 
 # %% [markdown]
-# # 3. Modeling
-#
-# Next, we want to transform our documents into some vector space. There are many techniques which could be used, but a well established one which captures in-document token relationships (important for semantic context) is Doc2Vec. Training a Doc2Vec model over our data will provide a vector embedding of each document in our corpus. This would facillitate several pathways:
-# 1) Enabling cluster analysis and visualization
-# 2) Similarity comparison between PPs
-# 3) Inferring vector embedding for non-corpus policies
-
-# %% [markdown]
-# ## 3.1 Training the (unsupervised) Doc2Vec model (or loading the last trained one)
-#
-# First, let's split the data to train/test sets
-
-# %%
-# N = cp.total_samples
-N = cp.total_samples
-TEST_FRAC = 0.2
-train_set, test_set = cp.generate_train_test_sets(n_samples=N, test_frac=TEST_FRAC, shuffled=True)
-print(f"Using {N:,} Samples ({N/cp.total_samples:.1%} of available samples, {TEST_FRAC:.1%} test).")
-
-# %% [markdown]
-# ## 3.2 Training using the training set
-
-# %%
-import time
-import multiprocessing as mp
-from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-
-# define save/load path
-MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
-
-# SHOULD_RETRAIN = True
-SHOULD_RETRAIN = False
-
-if not SHOULD_RETRAIN:
-    # load the last trained model
-    unsupervised_model = Doc2Vec.load(str(MODEL_PATH))
-
-    # Done
-    print("Unsupervised Model Loaded")
-    # TODO: print some model details
-
-else:
-    # Initialize and train the Doc2Vec model
-    unsupervised_model_kwargs = {
-        "vector_size": 300,
-        "window": 5,
-        "hs": 1,
-        "negative": 0,
-        "epochs": 10,
-        #         "workers": mp.cpu_count(),
-    }
-    unsupervised_model = Doc2Vec(**unsupervised_model_kwargs)
-
-    # Build vocabulary
-    print("Building vocabulary... ", end="")
-    unsupervised_model.build_vocab(train_set)
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-    # Train the model
-    print(f"Training unsupervised model... ", end="")
-    tic = time.perf_counter()
-    unsupervised_model.train(
-        train_set, total_examples=unsupervised_model.corpus_count, epochs=unsupervised_model.epochs
-    )
-
-    # Save the trained model for future use
-    print(f"Saving to '{MODEL_PATH}'... ", end="")
-    unsupervised_model.save(str(MODEL_PATH))
-    print("Done!")
-
-    # Done!
-    print(f"Training timing: {(time.perf_counter() - tic)/60:.1f} mins")
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-
-# %% [markdown]
-# ## 3.2 Sanity check
-# ### TODO: Admit this check into the codebase
-# check that documents are most similar to themselves. I do not expect/desire to optimize the fraction of model-inferred documents which are most similar to themselves, as this might mean the model is overfitting. Instead, this is just a test to see that the model does something logical.
-#
-# It is worth mentioning that while purposfully attempting to overfit a small subset of 1000 documents and using a complex model (increased vector size), I was only able to reach about 80% - I attribute this to noise in the training data.
-
-# %%
-from collections import Counter
-
-if SHOULD_RETRAIN:
-    model = unsupervised_model
-
-    # Set the number of top similar documents to consider
-    SAMPLE_SIZE = N // 10
-    TOP_N = 10
-
-    ranks = []
-    second_ranks = []
-    for idx, tagged_doc in enumerate(train_set):
-
-        # Estimate percentage using first (random) `SAMPLE_SIZE` documents
-        if idx + 1 == SAMPLE_SIZE:
-            break
-
-        # keep track
-        if not (idx + 1) % (SAMPLE_SIZE // 10):
-            print(f"{(idx+1)/(SAMPLE_SIZE):.0%}... ", end="")
-
-        # Calculate similarities only for the TOP_N similar documents for the current inferred vector
-        inferred_vec = model.infer_vector(tagged_doc.words)
-        sims = model.dv.most_similar([inferred_vec], topn=TOP_N)
-
-        # Find the rank of the tag in the top N
-        try:
-            rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
-        except ValueError:
-            # Handle the case where the tag is not found in sims
-            rank = -1  # Or any other value that indicates "not found"
-        ranks.append(rank)
-
-        second_ranks.append(sims[1])
-    print(" Done.")
-
-    counter = Counter(ranks)
-    print("counter: ", counter)
-
-    # Done
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-else:
-    print("Skipping...")
-
-# %% [markdown]
-# # 4 Model Evaluation
-#
-# Doc2Vec is an unsupervised model, so finding a metric to evaluate it is not a straightforward task, given the fact that we also do not have any labeled data.
-# Since I am still basically doing EDA, let's take a look at the test data in the learned vector embeddings, and see if any clusters emerge. My current short-term goal is to classify policies as "good" or "bad" (for the end-user, of course!), so I'm hoping to be able to see some clear boundries in the data.
-
-# %% [markdown]
-# ## 4.1 Inferring Vectors for Test Data
-
-# %%
-from ppa.display import Plotter, display_dim_reduction
-
-model = unsupervised_model
-
-# Infer document vectors for the test data
-print("Inferring vectors for test documents... ", end="")
-document_vectors_array = np.array([model.infer_vector(doc.words) for doc in test_set])
-print("Done.")
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
-# ## 4.2 Visualizing the Inferred Documents
-
-# %% [markdown]
-# PCA
-
-# %%
-from sklearn.decomposition import PCA
-
-N_samples = 10_000
-
-# Perform PCA to reduce dimensionality for visualization
-pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(document_vectors_array)
-
-annots = [
-    tagged_doc.tags[0]
-    for idx, tagged_doc in enumerate(test_set)
-    if (idx < N_samples) and (idx % 10 == 0)
-]
-display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
-
-# %% [markdown]
-# Let's try t-SNE as well
-
-# %%
-from sklearn.manifold import TSNE
-
-tsne = TSNE(
-    n_components=2,
-    perplexity=5,
-    learning_rate=200,
-    n_iter=500,
-    n_iter_without_progress=200,
-    random_state=SEED,
-)
-tsne_result = tsne.fit_transform(document_vectors_array)
-
-annots = [
-    tagged_doc.tags[0]
-    for idx, tagged_doc in enumerate(test_set)
-    if (idx < N_samples) and (idx % 10 == 0)
-]
-display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
-
-# %% [markdown]
-# We need to get some clue as to what the above means. Let's try gathering several "good" and "bad" privacy policies, and see where they stand in the PCA picture.
-
-# %% [markdown]
-# # 5 Incorprating labeled data
-# ## 5.1 ETL for Policy Ratings
+# # 3. Aqcuiring and incorporating labels
+# ## 3.1 ETL for Policy Ratings
 # Getting all tags, for searching the ToS;DR database
 
 # %%
@@ -485,8 +323,8 @@ ratings_df.sample(10)
 
 
 # %% [markdown]
-# ## 5.2 Exploration
-# ### 5.2.1 Checking for duplicates in data according to rating IDs
+# ## 3.2 Exploration
+# ### 3.2.1 Checking for duplicates in data according to rating IDs
 #
 # Let's try to check what policies with duplicate IDs look like - are they really the same? Note that ToS;DR rates terms-of-service together with privacy policies - I don't really know what same IDs mean!
 #
@@ -516,7 +354,7 @@ ratings_df.sample(10)
 # It appears that at least for one ID, the privacy policies are different. For now, we will disregard the IDs.
 
 # %% [markdown]
-# ### 5.2.2 Checking for Bias in Labeled Data
+# ### 3.2.2 Checking for Bias in Labeled Data
 
 # %%
 # with Plotter() as ax:
@@ -546,10 +384,7 @@ with Plotter() as ax:
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
 
 # %% [markdown]
-# ### 5.2.3 Visualizing Labeled Data Using Unsupervised Model
-# Let's visualize the all labeled data over the unsupervised model we have trained.
-#
-# First, let's update the corpus with labeled data, and save it separately:
+# Finally, let's update the corpus with labeled data, and save it separately:
 
 # %%
 # SHOULD_FORCE_LABELING = True
@@ -559,106 +394,20 @@ url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
 cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
 
 # %% [markdown]
-# Next, let's infer vectors for all the policies for which we have labels:
-
-# %%
-from ppa.utils import get_file_index_path
-from typing import Dict, List
-import json
-
-labeled_corpus_index_path = get_file_index_path(cp.labeled_corpus_path)
-
-index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
-with open(labeled_corpus_index_path, "r") as idx_file:
-    while True:
-        try:
-            start_pos, note = json.loads(idx_file.readline())
-            index_dict[note].append(start_pos)
-        except json.JSONDecodeError:
-            break
-
-labeled_start_pos = index_dict["good"] + index_dict["bad"]
-print(f"{len(labeled_start_pos)} labeled policies indexed (good + bad)")
-
-# %%
-from ppa.display import Plotter, display_dim_reduction
-from ppa.ppa import SampleGenerator
-
-# define the model
-model = unsupervised_model
-
-print("Gathering all rated policies... ", end="")
-labeled_policies = [
-    tagged_doc for tagged_doc in SampleGenerator(cp.labeled_corpus_path) if len(tagged_doc.tags) > 1
-]
-labels = [td.tags[1] for td in labeled_policies]
-print("Done.")
-
-# Infer document vectors for the test data
-print("Inferring vectors for labeled policies... ", end="")
-document_vectors = [model.infer_vector(doc.words) for idx, doc in enumerate(labeled_policies)]
-print("Done.")
-
-# Convert document vectors to a numpy array
-document_vectors_array = np.array(document_vectors)
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
-# And now, let's visualize them, with only the "good" policies annotated by URL:
-
-# %% [markdown]
-# # TODO: try visualizing with labels!!!
-
-# %%
-from sklearn.decomposition import PCA
-
-# Perform PCA to reduce dimensionality for visualization
-pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(document_vectors_array)
-
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in labeled_policies
-    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-]
-# display_dim_reduction(pca_result, "PCA", labels=labels, annots=annots, figsize=(10, 8))
-display_dim_reduction(pca_result, "PCA", labels=labels, figsize=(10, 8))
-
-# %%
-from sklearn.manifold import TSNE
-
-tsne = TSNE(
-    n_components=2,
-    perplexity=5,
-    learning_rate=200,
-    n_iter=1000,
-    n_iter_without_progress=500,
-    random_state=SEED,
-)
-tsne_result = tsne.fit_transform(document_vectors_array)
-
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in labeled_policies
-    if ratings_df.loc[ratings_df["tag"] == tagged_doc.tags[0], "rating"].iloc[0] == "good"
-]
-# display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
-display_dim_reduction(tsne_result, "t-SNE", labels=labels, figsize=(10, 8))
-
-# %% [markdown]
-# So, in both PCA and t-SNE visualizations, we see that no pattern emerges for "good" or "bad" policies. Essentially, this means that the current model does not capture what separates "good"/"bad" policies.
-# I will now try retraining the model with the new labels
-
-# %% [markdown]
-# # 6 Retrainning the Model with Some Labeled Data (Semi-Supervised?)
+# # 4. Modeling
+#
+# Next, we want to transform our documents into some vector space. There are many techniques which could be used, but a well established one which captures in-document token relationships (important for semantic context) is Doc2Vec. Training a Doc2Vec model over our data will provide a vector embedding of each document in our corpus. This would facillitate several pathways:
+# 1) Enabling cluster analysis and visualization
+# 2) Similarity comparison between PPs
+# 3) Inferring vector embedding for non-corpus policies
+# 4) Ultimately, this will enable using standard classification methods (tabular data)
 
 # %% [markdown]
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
 
 # %%
 N = cp.total_samples
+TEST_FRAC = 0.2
 
 train_set, test_set = cp.generate_train_test_sets(
     n_samples=N, test_frac=TEST_FRAC, labeled=True, shuffled=True
@@ -673,9 +422,12 @@ print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in test
 Beep(1000, 500)
 
 # %% [markdown]
-# Re-train the model (now semi-supervised):
+# Train the Doc2Vec model (semi-supervised):
 
 # %%
+import time
+from gensim.models.doc2vec import Doc2Vec
+
 # define save/load path
 MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
 
@@ -712,7 +464,7 @@ else:
     tic = time.perf_counter()
     semi_supervised_model.train(
         train_set,
-        total_examples=unsupervised_model.corpus_count,
+        total_examples=semi_supervised_model.corpus_count,
         epochs=semi_supervised_model.epochs,
     )
 
@@ -726,7 +478,14 @@ else:
     Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
-# Sanity check
+# # 5 Doc2Vec Model Evaluation
+#
+# Doc2Vec, using secondary tags, is a weakly semi-supervised model, so finding a metric to evaluate it is not a straightforward task.
+# Since I am still basically doing EDA, let's take a look at the test data in the learned vector embeddings, and see if any clusters emerge. My current short-term goal is to classify policies as "good" or "bad" (for the end-user, of course!), so I'm hoping to be able to see some clear boundries in the data.
+
+# %% [markdown]
+# ## 5.1 Sanity check
+# As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
 from collections import Counter
@@ -775,7 +534,8 @@ else:
     print("Skipping...")
 
 # %% [markdown]
-# Visualizing the results
+# ## 5.2 Visualizing the results using dimensionallity reduction to 2D
+# We begin by inferring vectors for all labeled samples in the test set
 
 # %%
 # define the model
@@ -785,33 +545,39 @@ model = semi_supervised_model
 print("Inferring vectors for test policies... ", end="")
 test_vectors, test_tags = zip(*[(model.infer_vector(td.words), td.tags) for td in test_set])
 test_vectors = np.array(test_vectors)
+test_labels = [tags[1] for tags in test_tags if len(tags) > 1]
 print("Done.")
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
-# PCA
+# ### 5.2.1 PCA
 
 # %%
+from sklearn.decomposition import PCA
+from ppa.display import display_dim_reduction
+
 # Perform PCA to reduce dimensionality for visualization
 pca = PCA(n_components=2)  # You can adjust the number of components as needed
 pca_result = pca.fit_transform(test_vectors)
 
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in test_set
-    if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-]
-display_dim_reduction(pca_result, "PCA", annots=annots, figsize=(10, 8))
+# annots = [
+#     tagged_doc.tags[0]
+#     for tagged_doc in test_set
+#     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
+# ]
+display_dim_reduction(pca_result, "PCA", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
-# t-SNE
+# ### 5.2.2 t-SNE
 
 # %%
+from sklearn.manifold import TSNE
+
 tsne = TSNE(
     n_components=2,
-    perplexity=10,
+    perplexity=5,
     learning_rate=200,
     n_iter=1000,
     n_iter_without_progress=500,
@@ -819,54 +585,27 @@ tsne = TSNE(
 )
 tsne_result = tsne.fit_transform(test_vectors)
 
-annots = [
-    tagged_doc.tags[0]
-    for tagged_doc in test_set
-    if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-]
-display_dim_reduction(tsne_result, "t-SNE", annots=annots, figsize=(10, 8))
+# annots = [
+#     tagged_doc.tags[0]
+#     for tagged_doc in test_set
+#     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
+# ]
+display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
-# Devising a metric: Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly
+# I cannot see any pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualization doesn't appear to capture it.
 
 # %% [markdown]
-# # TODO: I need to figure out how to make this into a metric (ask ChatGPT) - I have two dictionaries of similarities (good, bad). I could decide on some threshold above which policies are predicted as good/bad, then calculate some accuracy score (biased for bad!!!) which basically counts how many predicted policies are actually labeled as predicted.
+# ## 5.3 Devising a metric
+# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly
+
+# %% [markdown]
 # # TODO: once the metric is ready, I should test my new preprocessing routine and see if it improves the metric
-
-# %%
-# from sklearn.metrics.pairwise import cosine_similarity
-
-# print("Gathering good and bad vector lists: ", end="")
-# # train
-# train_vectors, train_tags = zip(*[(model.dv[td.tags[0]], td.tags) for td in train_set])
-# mean_good_train_vector = np.array([vec for vec, tags in zip(train_vectors, train_tags) if len(tags) > 1 and tags[1] == "good"]).mean(axis=0)
-# mean_bad_train_vector = np.array([vec for vec, tags in zip(train_vectors, train_tags) if len(tags) > 1 and tags[1] == "bad"]).mean(axis=0)
-
-# # test
-# labeled_test_vectors, labeled_test_tags = zip(*[(vec, tags) for vec, tags in zip(test_vectors, test_tags) if len(tags) > 1])
-# print("Done.")
-
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# similarities_good = {}
-# similarities_bad = {}
-# for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
-#     # Calculate similarity with "good" policies
-#     similarity_good = cosine_similarity([test_policy_vector], [mean_good_train_vector])
-#     similarities_good[test_tag[0]] = (similarity_good[0][0], test_tag[1])
-
-#     # Calculate similarity with "bad" policies
-#     similarity_bad = cosine_similarity([test_policy_vector], [mean_bad_train_vector])
-#     similarities_bad[test_tag[0]] = (similarity_bad[0][0], test_tag[1])
-
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
 from sklearn.metrics.pairwise import cosine_similarity
 
-print("Gathering good and bad vector lists: ", end="")
+print("Gathering good and bad vector lists... ", end="")
 # train
 train_vectors, train_tags = zip(*[(model.dv[td.tags[0]], td.tags) for td in train_set])
 mean_good_train_vector = np.array(
@@ -882,100 +621,64 @@ labeled_test_vectors, labeled_test_tags = zip(
 )
 print("Done.")
 
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-similarities = {}
+good_similarities = {}
 for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
+    good_similarities[test_tag[0]] = (
+        (
+            cosine_similarity([test_policy_vector], [mean_good_train_vector])[0][0]
+            - cosine_similarity([test_policy_vector], [mean_bad_train_vector])[0][0]
+        ),
+        test_tag[1],
+    )
 
-    if test_tag[1] == "good":
-        similarity = cosine_similarity([test_policy_vector], [mean_good_train_vector])
-    else:  # bad
-        similarity = cosine_similarity([test_policy_vector], [mean_bad_train_vector])
-    similarities[test_tag[0]] = (similarity[0][0], test_tag[1])
+# Checkout the URLs and scores
+# print(dict(sorted(good_similarities.items(), key=lambda item: item[1][0], reverse=True)))
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
-# %%
-dict(sorted(similarities.items(), key=lambda item: item[1], reverse=True))
+# %% [markdown]
+# ROC AUC
 
 # %%
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 # Collect predicted scores and true labels for "good" and "bad" policies
 good_true_labels, good_similarity_scores = zip(
-    *[(true_label == "good", score) for score, true_label in similarities.values()]
-)
-bad_true_labels, bad_similarity_scores = zip(
-    *[(true_label == "bad", score) for score, true_label in similarities.values()]
+    *[(true_label == "good", score) for score, true_label in good_similarities.values()]
 )
 
-# Calculate ROC AUC for "good"/"bad" policies
-roc_auc_good = roc_auc_score(good_true_labels, good_similarity_scores, average="weighted")
-roc_auc_bad = roc_auc_score(bad_true_labels, bad_similarity_scores, average="weighted")
-
-print(f"ROC AUC (good): {roc_auc_good:.2f}")
-print(f"ROC AUC (bad): {roc_auc_bad:.2f}")
-
-
-# %%
-# good_threshold = 0.26  # Adjust the threshold as needed
-# bad_threshold = -0.5  # Adjust the threshold as needed
-
-# # Initialize counters for evaluation metrics
-# true_good = 0
-# predicted_good = 0
-# correctly_predicted_good = 0
-# true_bad = 0
-# predicted_bad = 0
-# correctly_predicted_bad = 0
-
-# # Iterate through test policies and their predicted labels
-# for (similarity_score, true_label) in similarities_good.values():
-
-#     if true_label == "good":
-#         true_good += 1
-
-#     if similarity_score >= good_threshold:
-#         predicted_good += 1
-#         if true_label == "good":
-#             correctly_predicted_good += 1
-
-# for (similarity_score, true_label) in similarities_bad.values():
-
-#     if true_label == "bad":
-#         true_bad += 1
-
-#     if similarity_score >= bad_threshold:
-#         predicted_bad += 1
-#         if true_label == "bad":
-#             correctly_predicted_bad += 1
-
-# # Calculate precision and recall
-# precision_good = correctly_predicted_good / predicted_good if predicted_good > 0 else 0
-# recall_good = correctly_predicted_good / true_good if true_good > 0 else 0
-# f1_good = 2 / (1 / precision_good + 1 / recall_good)
-
-# precision_bad = correctly_predicted_bad / predicted_bad if predicted_bad > 0 else 0
-# recall_bad = correctly_predicted_bad / true_bad if true_bad > 0 else 0
-# f1_bad = 2 / (1 / precision_bad + 1 / recall_bad)
-
-# # Calculate bias-adjusted accuracy for "bad" policies
-# bias_adjusted_accuracy_bad = (precision_bad + recall_bad) / 2
-
-# print(f"Precision (good): {precision_good:.2f}")
-# print(f"Recall (good): {recall_good:.2f}")
-# print(f"F1 (good): {f1_good:.2f}")
-# print()
-# print(f"Precision (bad): {precision_bad:.2f}")
-# print(f"Recall (bad): {recall_bad:.2f}")
-# print(f"F1 (bad): {f1_bad:.2f}")
-# print(f"Bias-adjusted Accuracy (bad): {bias_adjusted_accuracy_bad:.2f}")
+# Display ROC curve and ROC AUC
+fpr, tpr, thresholds = roc_curve(good_true_labels, good_similarity_scores)
+roc_auc = roc_auc_score(good_true_labels, good_similarity_scores)
+with Plotter(
+    suptitle="Receiver Operating Characteristic (ROC) Curve",
+    xlabel="False Positive Rate",
+    ylabel="True Positive Rate",
+) as ax:
+    ax.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.2f})")
+    ax.plot([0, 1], [0, 1], "k--", label="Random")
+    ax.legend()
 
 
 # %% [markdown]
-# # Label test policies according to nearest labeld policy from training coprus
+# AUC-PR
+
+# %%
+from sklearn.metrics import precision_recall_curve, auc
+
+precision, recall, _ = precision_recall_curve(good_true_labels, good_similarity_scores)
+auc_pr = auc(recall, precision)
+
+with Plotter(
+    xlabel="Recall",
+    ylabel="Precision",
+) as ax:
+    ax.plot(recall, precision, label=f"Precision-Recall Curve (AUC-PR = {auc_pr:.2f})")
+    ax.legend()
+
+# %% [markdown]
+# # Label test policies according to nearest labeld policy from training coprus - check this out if classification using the available true labels is insufficient
 
 # %%
 # from gensim.models import Doc2Vec
@@ -1024,7 +727,7 @@ print(f"ROC AUC (bad): {roc_auc_bad:.2f}")
 
 
 # %% [markdown]
-# # TODO: this will only be relevant once a metric is devised
+# # TODO: Try this using the AUC-PR metric
 # Attempting to implement hyperparameter search
 
 # %%

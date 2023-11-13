@@ -85,22 +85,29 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 # The documents are never loaded together into memory (one-by-one at all stages)
 
 # %%
+# TESTEST - use only N paths!
+N_PATHS = 10_000_000
+print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
+
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
-policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
+policy_paths = [
+    fpath
+    for idx, fpath in enumerate(REPO_PATH.rglob("*.md"))
+    if fpath.name != "README.md" and idx <= N_PATHS
+]
 print(f"Found {len(policy_paths):,} privacy policy files.")
 
-# # TESTEST - use only N paths!
-# N_PATHS = 10_000
-# print(f"\nWARNING! USING ONLY {N_PATHS:,} PATHS!")
-# policy_paths = policy_paths[:N_PATHS]
-
 # %% [markdown]
-# # TODO: find strange tokens and take care of them. e.g:
-# ## 1) I noticed some tokens containing underscores '_' - these should not exist!
-# ## 2) I noticed some \<URL> tokens concatenated to some other word/token.
-# # TODO: implement a second processing step after Dictionary object is created, which should possibly contain:
-# ## 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
+# # Processing TODOs:
+# ## TODO: for individual policies - try seeing if the URL appears as is or as consecutive separate words (use word-ninja) in the policy, more than once. if so, convert all appearances to \<COMPANY> tokens.
+# ## TODO: find strange tokens and take care of them. e.g:
+# ### 1) I noticed some tokens containing underscores '_' - these should not exist!
+# ### 2) I noticed some \<URL> tokens concatenated to some other word/token.
+# ### 3) I noticed \<URL>_\<URL> structures
+# ## Start by establishing a way to search for patterns and get at least the first policy containing them so that their removal could be tested.
+# ## TODO: implement a second processing step after Dictionary object is created, which should possibly contain:
+# ### 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
 
 # %%
 # TEST
@@ -141,6 +148,9 @@ print(f"Found {len(policy_paths):,} privacy policy files.")
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
 
+# %% [markdown]
+# # TODO: figure out how to use a numpy.random.RandomState object instead of a seed
+
 # %%
 from ppa.ppa import CorpusProcessor
 
@@ -169,6 +179,8 @@ cp.process(
 Beep(1000, 500)
 
 # %%
+# TEST
+
 IDX = 3
 
 sg = cp.generate_samples(shuffled=False)
@@ -405,6 +417,9 @@ cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
 # %% [markdown]
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
 
+# %% [markdown]
+# # TODO: the SampleGenerator objects created for the train/test sets actually used in the model should be saved and re-used if the model is not retrained! Otherwise, evaluation is useless!
+
 # %%
 N = cp.total_samples
 TEST_FRAC = 0.2
@@ -531,7 +546,7 @@ if SHOULD_RETRAIN:
     Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 else:
-    print("Skipping...")
+    print("Skipping.")
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D
@@ -542,10 +557,11 @@ else:
 model = semi_supervised_model
 
 # Infer document vectors for the test data
-print("Inferring vectors for test policies... ", end="")
-test_vectors, test_tags = zip(*[(model.infer_vector(td.words), td.tags) for td in test_set])
-test_vectors = np.array(test_vectors)
-test_labels = [tags[1] for tags in test_tags if len(tags) > 1]
+print("Inferring vectors for labeled test policies... ", end="")
+labeled_test_vectors, labeled_test_tags = zip(
+    *[(model.infer_vector(td.words), td.tags) for td in test_set if len(td.tags) > 1]
+)
+labeled_test_vectors = np.array(labeled_test_vectors)
 print("Done.")
 
 # Beep when done
@@ -558,9 +574,11 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 from sklearn.decomposition import PCA
 from ppa.display import display_dim_reduction
 
+test_labels = [tags[1] for tags in labeled_test_tags]
+
 # Perform PCA to reduce dimensionality for visualization
 pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(test_vectors)
+pca_result = pca.fit_transform(labeled_test_vectors)
 
 # annots = [
 #     tagged_doc.tags[0]
@@ -577,13 +595,13 @@ from sklearn.manifold import TSNE
 
 tsne = TSNE(
     n_components=2,
-    perplexity=5,
+    perplexity=1,
     learning_rate=200,
     n_iter=1000,
     n_iter_without_progress=500,
     random_state=SEED,
 )
-tsne_result = tsne.fit_transform(test_vectors)
+tsne_result = tsne.fit_transform(labeled_test_vectors)
 
 # annots = [
 #     tagged_doc.tags[0]
@@ -597,15 +615,12 @@ display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
 # ## 5.3 Devising a metric
-# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly
-
-# %% [markdown]
-# # TODO: once the metric is ready, I should test my new preprocessing routine and see if it improves the metric
+# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly.
 
 # %%
 from sklearn.metrics.pairwise import cosine_similarity
 
-print("Gathering good and bad vector lists... ", end="")
+print("Calculating mean good/bad training-set (model) vectors... ", end="")
 # train
 train_vectors, train_tags = zip(*[(model.dv[td.tags[0]], td.tags) for td in train_set])
 mean_good_train_vector = np.array(
@@ -614,13 +629,9 @@ mean_good_train_vector = np.array(
 mean_bad_train_vector = np.array(
     [vec for vec, tags in zip(train_vectors, train_tags) if len(tags) > 1 and tags[1] == "bad"]
 ).mean(axis=0)
-
-# test
-labeled_test_vectors, labeled_test_tags = zip(
-    *[(vec, tags) for vec, tags in zip(test_vectors, test_tags) if len(tags) > 1]
-)
 print("Done.")
 
+print("Calculating similarites... ", end="")
 good_similarities = {}
 for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
     good_similarities[test_tag[0]] = (
@@ -630,23 +641,26 @@ for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors)
         ),
         test_tag[1],
     )
+print("Done.")
 
 # Checkout the URLs and scores
 # print(dict(sorted(good_similarities.items(), key=lambda item: item[1][0], reverse=True)))
+
+# Collect predicted scores and true labels for "good" and "bad" policies
+print("Calculating test sample scores... ", end="")
+good_true_labels, good_similarity_scores = zip(
+    *[(true_label == "good", score) for score, true_label in good_similarities.values()]
+)
+print("Done.")
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
-# ROC AUC
+# ### 5.3.1 ROC AUC
 
 # %%
 from sklearn.metrics import roc_auc_score, roc_curve
-
-# Collect predicted scores and true labels for "good" and "bad" policies
-good_true_labels, good_similarity_scores = zip(
-    *[(true_label == "good", score) for score, true_label in good_similarities.values()]
-)
 
 # Display ROC curve and ROC AUC
 fpr, tpr, thresholds = roc_curve(good_true_labels, good_similarity_scores)
@@ -662,7 +676,7 @@ with Plotter(
 
 
 # %% [markdown]
-# AUC-PR
+# ### 5.3.2 AUC-PR
 
 # %%
 from sklearn.metrics import precision_recall_curve, auc
@@ -676,6 +690,184 @@ with Plotter(
 ) as ax:
     ax.plot(recall, precision, label=f"Precision-Recall Curve (AUC-PR = {auc_pr:.2f})")
     ax.legend()
+
+# %%
+# TEST
+
+a = cp.generate_samples()
+len(a[:6])
+
+# %% [markdown]
+# ## 5.4 Hyperparameter Search
+
+# %% [markdown]
+# # TODO: in order to properly create MyCrossValidator (CV splitter), I should move all train/test splitting functionallity from CorpusGenerator to SampleGenerator! This way I could also stop using the corpus generator after the initial generation of data, and move on to using only the SampleGenerator, which should also have save/load functionallity so that the same random state could be used?
+
+# %%
+from sklearn.experimental import enable_halving_search_cv  # noqa
+from sklearn.model_selection import HalvingRandomSearchCV
+from sklearn.metrics import make_scorer, precision_recall_curve, auc
+from functools import partial
+from sklearn.base import BaseEstimator
+import numpy as np
+from gensim.models import Doc2Vec
+from scipy.stats import randint, uniform
+import logging
+
+# Create a larger parameter grid with more combinations
+param_dist = {
+    "vector_size": randint(50, 401),  # Random integer between 50 and 200
+    "epochs": randint(10, 41),  # Random integer between 10 and 40
+    "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
+    "window": randint(3, 11),  # Random integer between 3 and 10 for the window size
+    "min_count": randint(1, 11),  # Random integer between 1 and 10 for minimum word count
+    "sample": uniform(1e-7, 1e-3),  # Random float between 0.0001 and 0.001 for downsampling
+    "hs": [0, 1],
+}
+
+
+class MyCrossValidator:
+    """Doc."""
+
+    def __init__(self, n_splits=5, shuffle=False, random_state=None):
+        self.n_splits = n_splits
+        self.shuffle = shuffle
+        self.random_state = random_state
+
+    def split(self, X, y=None, groups=None):
+        indices = np.arange(len(X))
+        if self.shuffle:
+            rng = np.random.default_rng(self.random_state)
+            indices = rng.permutation(indices)
+
+        fold_sizes = np.full(self.n_splits, len(X) // self.n_splits, dtype=int)
+        fold_sizes[: len(X) % self.n_splits] += 1
+
+        current = 0
+        for fold_size in fold_sizes:
+            start, stop = current, current + fold_size
+            yield indices[:start] + indices[stop:], indices[start:stop]
+            current = stop
+
+    def get_n_splits(self, X, y, groups=None):
+        return self.n_splits
+
+
+class Doc2VecEstimator(BaseEstimator):
+    """Doc."""
+
+    def __init__(self, vector_size, epochs, dm, window, min_count, sample, hs):
+        self.vector_size = vector_size
+        self.epochs = epochs
+        self.dm = dm
+        self.window = window
+        self.min_count = min_count
+        self.sample = sample
+        self.hs = hs
+        self.model = None
+        self.mean_good_train_vector = None
+        self.mean_bad_train_vector = None
+
+    def fit(self, X, y=None):
+        """Doc."""
+
+        logging.info(f"[fit] len(X): {len(X)}")  # TESTESTEST
+        #         logging.info(f"X: {X}") # TESTESTEST
+
+        model = Doc2Vec(
+            vector_size=self.vector_size,
+            epochs=self.epochs,
+            dm=self.dm,
+            window=self.window,
+            min_count=self.min_count,
+            sample=self.sample,
+            hs=self.hs,
+        )
+        model.build_vocab(X)
+        model.train(X, total_examples=model.corpus_count, epochs=model.epochs)
+        self.model = model
+
+        # Compute mean vectors from the training set
+        train_vectors, train_tags = zip(*[(self.model.dv[td.tags[0]], td.tags) for td in X])
+        #         logging.info(f"{train_tags}")
+        self.mean_good_train_vector = np.array(
+            [
+                vec
+                for vec, tags in zip(train_vectors, train_tags)
+                if len(tags) > 1 and tags[1] == "good"
+            ]
+        ).mean(axis=0)
+        self.mean_bad_train_vector = np.array(
+            [
+                vec
+                for vec, tags in zip(train_vectors, train_tags)
+                if len(tags) > 1 and tags[1] == "bad"
+            ]
+        ).mean(axis=0)
+
+        return self
+
+    def score(self, X, y=None):
+        """Compute the AUC-PR score on the test set."""
+
+        logging.info(f"[score] len(X): {len(X)}")
+
+        #         for td in X:
+        #             logging.info(f"[score] TaggedDocument tags: {td.tags}")
+
+        # Use self.mean_good_train_vector and self.mean_bad_train_vector to compute scores
+        labeled_test_vectors, labeled_test_tags = zip(
+            *[(self.model.infer_vector(td.words), td.tags) for td in X if len(td.tags) > 1]
+        )
+        labeled_test_vectors = np.array(labeled_test_vectors)
+
+        # Calculating similarities
+        good_similarities = {}
+        for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
+            good_similarities[test_tag[0]] = (
+                (
+                    cosine_similarity([test_policy_vector], [self.mean_good_train_vector])[0][0]
+                    - cosine_similarity([test_policy_vector], [self.mean_bad_train_vector])[0][0]
+                ),
+                test_tag[1],
+            )
+
+        # Calculating test sample scores
+        y_true, y_scores = zip(
+            *[(true_label == "good", score) for score, true_label in good_similarities.values()]
+        )
+
+        # Compute AUC-PR
+        precision, recall, _ = precision_recall_curve(y_true, y_scores)
+        auc_pr = auc(recall, precision)
+        return auc_pr
+
+
+# Create HalvingRandomSearchCV object with the custom estimator
+halving_random_search = HalvingRandomSearchCV(
+    estimator=Doc2VecEstimator(
+        vector_size=100, epochs=10, dm=1, window=5, min_count=1, sample=1e-5, hs=0
+    ),
+    param_distributions=param_dist,
+    n_candidates="exhaust",
+    verbose=1,
+    random_state=42,
+    cv=5,
+)
+
+# Fit the hyperparameter search on your training data
+tic = time.perf_counter()
+print("Starting search... ")
+N_SAMPLES = 10_000
+halving_random_search.fit(train_set)
+print(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+# Get the best hyperparameters and model
+best_params = halving_random_search.best_params_
+best_model = halving_random_search.best_estimator_
+
+# Print the best hyperparameters
+print("Best Hyperparameters:", best_params)
 
 # %% [markdown]
 # # Label test policies according to nearest labeld policy from training coprus - check this out if classification using the available true labels is insufficient
@@ -724,120 +916,3 @@ with Plotter(
 #     default_label = nearest_labels[0]
 
 # print("Predicted Label:", default_label)
-
-
-# %% [markdown]
-# # TODO: Try this using the AUC-PR metric
-# Attempting to implement hyperparameter search
-
-# %%
-# # Sample tagged documents training data
-# print("Preparing training data... ", end="")
-# N = 10_000
-# train_data = cp.generate_samples(n_samples=N)
-# print(f"Training data ready.")
-
-# %%
-# from sklearn.experimental import enable_halving_search_cv  # noqa
-# from sklearn.model_selection import HalvingRandomSearchCV
-# from sklearn.metrics import make_scorer
-# from functools import partial
-# from sklearn.base import BaseEstimator
-# import numpy as np
-# import collections
-# from gensim.models import Doc2Vec
-# from scipy.stats import randint, uniform
-
-# # Create a larger parameter grid with more combinations
-# param_dist = {
-#     "vector_size": randint(50, 401),  # Random integer between 50 and 200
-#     "epochs": randint(10, 41),  # Random integer between 10 and 40
-#     "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
-#     "window": randint(3, 11),  # Random integer between 3 and 10 for the window size
-#     "min_count": randint(1, 11),  # Random integer between 1 and 10 for minimum word count
-#     "sample": uniform(1e-7, 1e-3),  # Random float between 0.0001 and 0.001 for downsampling
-#     "hs": [0, 1],
-# }
-
-
-# class Doc2VecEstimator(BaseEstimator):
-#     """Doc."""
-
-#     def __init__(self, vector_size, epochs, dm, window, min_count, sample, hs):
-#         self.vector_size = vector_size
-#         self.epochs = epochs
-#         self.dm = dm
-#         self.window = window
-#         self.min_count = min_count
-#         self.sample = sample
-#         self.hs = hs
-
-#     def fit(self, X, y=None):
-#         model = Doc2Vec(
-#             vector_size=self.vector_size,
-#             epochs=self.epochs,
-#             dm=self.dm,
-#             window=self.window,
-#             min_count=self.min_count,
-#             sample=self.sample,
-#             hs=self.hs,
-#         )
-#         model.build_vocab(train_data)
-#         model.train(train_data, total_examples=model.corpus_count, epochs=model.epochs)
-#         self.model = model
-#         return self
-
-#     def predict(self, X):
-#         # This is a dummy predict method since it's not relevant for Doc2Vec models
-#         return None
-
-
-# # Define a scoring function for HalvingRandomSearchCV to maximize documents at rank 0
-# def custom_scorer(estimator, X, y):
-#     train_data = X  # Assuming X contains the train_data
-#     fraction_size = N // 10
-
-#     ranks = []
-#     for idx, tagged_doc in enumerate(train_data):
-#         # Estimate percentage using first (random) `SAMPLE_SIZE` documents
-#         if idx + 1 == fraction_size:
-#             break
-
-#         inferred_vec = estimator.model.infer_vector(tagged_doc.words)
-#         sims = estimator.model.dv.most_similar([inferred_vec], topn=TOP_N)
-#         try:
-#             rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
-#         except ValueError:
-#             rank = -1
-#         ranks.append(rank)
-#     counter = collections.Counter(ranks)
-#     return counter[0]  # Maximize the number of documents at rank 0
-
-
-# # Create a custom scorer function with a fixed model and training data
-# scorer = partial(custom_scorer, train_data=train_data)
-
-# # Create HalvingRandomSearchCV object with the custom estimator
-# halving_random_search = HalvingRandomSearchCV(
-#     estimator=Doc2VecEstimator(
-#         vector_size=100, epochs=10, dm=1, window=5, min_count=1, sample=1e-5, hs=0
-#     ),
-#     param_distributions=param_dist,
-#     n_candidates="exhaust",
-#     verbose=1,
-#     scoring=make_scorer(scorer, greater_is_better=False),
-#     random_state=42,
-#     cv=2,
-# )
-
-# # Fit the hyperparameter search on your training data
-# tic = time.perf_counter()
-# halving_random_search.fit(np.zeros(N), np.zeros(N))
-# print(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
-
-# # Get the best hyperparameters and model
-# best_params = halving_random_search.best_params_
-# best_model = halving_random_search.best_estimator_
-
-# # Print the best hyperparameters
-# print("Best Hyperparameters:", best_params)

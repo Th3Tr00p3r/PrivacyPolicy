@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import InitVar, dataclass
 from functools import partial
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from winsound import Beep
 
 import aiofiles  # type: ignore
@@ -201,6 +201,7 @@ class SampleGenerator:
     fpath: Path
     start_pos_list: List[int] = None
     index_suffix: InitVar[str] = "_idx"
+    limit: int = None
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -221,25 +222,51 @@ class SampleGenerator:
         Iterate over samples in the data file.
         """
 
-        for deserialized_obj in self.indexed_file().read_all():
-            yield TaggedDocument(*deserialized_obj)
+        if self.limit:
+            for deserialized_obj, _ in zip(self.indexed_file().read_all(), range(self.limit)):
+                yield TaggedDocument(*deserialized_obj)
+        else:
+            for deserialized_obj in self.indexed_file().read_all():
+                yield TaggedDocument(*deserialized_obj)
 
-    def __getitem__(self, pos_idx: int) -> TaggedDocument:
+    def __getitem__(self, pos_idx: int | slice) -> TaggedDocument:
         """Doc."""
 
-        with self.indexed_file(shuffled=False) as idx_input_file:
-            return TaggedDocument(*idx_input_file.read_idx(pos_idx))
+        if isinstance(pos_idx, slice):
+            start, stop, step = pos_idx.indices(len(self))
+            pos_idxs: List[int] | range = range(start, stop, step)
+        else:
+            pos_idxs = [pos_idx]
+
+        samples = []
+        for pos_idx in pos_idxs:
+            with self.indexed_file(shuffled=False) as idx_input_file:
+                if (self.limit is None) or (pos_idx < self.limit):
+                    samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
+                else:
+                    raise IndexError(f"Limited to {self.limit} samples!")
+
+        if len(samples) > 1:
+            return samples
+        else:
+            return samples[0]
 
     def __len__(self):
         """Doc."""
 
-        try:
-            return len(self.start_pos_list)
-        except TypeError:
-            len_ = 0
-            for _ in self.indexed_file().read_all():
-                len_ += 1
-            return len_
+        if self.limit:
+            if self.start_pos_list:
+                return len(self.start_pos_list)
+            else:
+                return self.limit
+        else:
+            try:
+                return len(self.start_pos_list)
+            except TypeError:
+                len_ = 0
+                for _ in self.indexed_file().read_all():
+                    len_ += 1
+                return len_
 
 
 @dataclass
@@ -284,7 +311,7 @@ class CorpusProcessor:
             random.seed(self.seed)
 
     def __repr__(self):
-        return f"CorpusProcessor({len(self.fpaths)} docs, seed={self.seed}"
+        return f"CorpusProcessor({len(self.total_samples):,} docs, seed={self.seed})"
 
     @timer(1000)
     def process(self, force=False, **kwargs):
@@ -304,7 +331,7 @@ class CorpusProcessor:
             print("Using existing training data.")
         else:
             print(
-                f"Processing and saving {self.total_samples:,} TaggedDocument objects to disk: ",
+                f"Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk: ",
                 end="",
             )
             # Initialize a Dictionary object
@@ -327,10 +354,15 @@ class CorpusProcessor:
 
             # filter tokens
             print(
-                "Filtering tokens and re-saving TaggedDocument objects to disk: ",
+                "Filtering tokens and documents and re-saving TaggedDocument objects to disk... ",
                 end="",
             )
-            self._filter_tokens(**kwargs)
+            n_docs_filtered, n_tokens_filtered = self._filter_tokens(**kwargs)
+            # removing the filtered documents from the total count
+            self.total_samples -= n_docs_filtered
+            print(
+                f"Filtered {n_docs_filtered:,} documents and {n_tokens_filtered:,} unique tokens."
+            )
 
             print("Saving Dictionary... ", end="")
             self.dct.save(str(self.dict_path))
@@ -343,8 +375,10 @@ class CorpusProcessor:
         min_tokens: int = 10,
         max_tokens: int = 10_000,
         **kwargs,
-    ):
+    ) -> Tuple[int, int]:
         """Doc."""
+
+        n_tokens_before = len(self.dct)
 
         # filter words appearing in less then n_below documents, or more then above 'no_above' fraction of documents
         fltrd_dct = deepcopy(self.dct)
@@ -355,6 +389,7 @@ class CorpusProcessor:
             # keep_tokens=None
         )
 
+        n_docs_filtered = 0
         # re-initialize the Dictionary
         self.dct = Dictionary()
         with IndexedFile(self.corpus_path, "write") as idx_output_file:
@@ -380,6 +415,11 @@ class CorpusProcessor:
                         idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
                     except IndexError:
                         idx_output_file.write(tagged_doc)
+
+                else:
+                    n_docs_filtered += 1
+
+        return n_docs_filtered, n_tokens_before - len(self.dct)
 
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
@@ -488,46 +528,44 @@ class CorpusProcessor:
                 train_start_positions.append(index_dict["unlabeled"].pop())
 
             # use the rest as test set file index
-            n_test_good = n_samples - n_train_good
-            n_test_bad = n_samples - n_train_bad
-            n_test_unlabeled = n_samples - n_train_unlabeled
-            try:
-                test_start_positions = (
-                    index_dict["good"][:n_test_good]
-                    + index_dict["bad"][:n_test_bad]
-                    + index_dict["unlabeled"][:n_test_unlabeled]
-                )
-            except KeyError as exc:
-                raise RuntimeError(f"Not all types of labels exist! [{exc}]")
+            if test_frac:
+                n_test_good = n_samples - n_train_good
+                n_test_bad = n_samples - n_train_bad
+                n_test_unlabeled = n_samples - n_train_unlabeled
+                try:
+                    test_start_positions = (
+                        index_dict["good"][:n_test_good]
+                        + index_dict["bad"][:n_test_bad]
+                        + index_dict["unlabeled"][:n_test_unlabeled]
+                    )
+                except KeyError as exc:
+                    raise RuntimeError(f"Not all types of labels exist! [{exc}]")
+            else:
+                test_start_positions = []
 
         # all unlabeled
         else:
-            if shuffled:
-                # Get the entire file index as a list
-                index_list = []
-                with open(file_idx_path, "r") as idx_file:
-                    while True:
-                        try:
-                            start_pos, _ = json.loads(idx_file.readline())
-                            index_list.append(start_pos)
-                        except json.JSONDecodeError:
-                            break
+            # Get the entire file index as a list
+            index_list = []
+            with open(file_idx_path, "r") as idx_file:
+                while True:
+                    try:
+                        start_pos, _ = json.loads(idx_file.readline())
+                        index_list.append(start_pos)
+                    except json.JSONDecodeError:
+                        break
 
-                # Shuffle the index (optional) - this means choosing different train/test sets
+            # Shuffle the index (optional) - this means choosing different train/test sets
+            if shuffled:
                 random.shuffle(index_list)
 
-                # create train/test file indices
-                train_start_positions = index_list[:n_train]
-                test_start_positions = index_list[n_train:n_samples]
-
-            # if shuffling isn't needed (such as when processing), no indexing is needed
-            else:
-                train_start_positions = None
-                test_start_positions = []
+            # create train/test file indices
+            train_start_positions = index_list[:n_train]
+            test_start_positions = index_list[n_train:n_samples]
 
         # Initialize re-generators
         if not test_start_positions:
-            return SampleGenerator(fpath, train_start_positions)
+            return SampleGenerator(fpath, train_start_positions, limit=n_samples)
         else:
             return SampleGenerator(fpath, train_start_positions), SampleGenerator(
                 fpath, test_start_positions

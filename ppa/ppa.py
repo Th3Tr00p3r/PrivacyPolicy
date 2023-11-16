@@ -1,11 +1,9 @@
 import json
 import logging
 import logging.config
-import random
 import re
-from contextlib import suppress
 from copy import deepcopy
-from dataclasses import InitVar, dataclass
+from dataclasses import InitVar, dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -188,20 +186,21 @@ class ToSDRDataLoader:
 
 @dataclass
 class SampleGenerator:
-    """
-    Generate samples from file.
-
-    Args:
-        fpath (Path): The path to the data file.
-        n_samples (int): The number of samples to generate.
-        offset (int): The offset for skipping samples (default is 0).
-        dct (Dictionary): The Gensim Dictionary for ID conversion (default is None).
-    """
+    """Doc."""
 
     fpath: Path
-    start_pos_list: List[int] = None
+    label_index_path: Path
+    start_pos_list: List[int]
+    shuffled: bool = False
     index_suffix: InitVar[str] = "_idx"
     limit: int = None
+    rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
+
+    @property
+    def labels(self):
+        """Doc."""
+
+        return self._get_labels()
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -210,9 +209,11 @@ class SampleGenerator:
             IndexedFile,
             self.fpath,
             "read",
+            self.rng,
             self.start_pos_list,
             index_suffix,
         )
+        self.in_memory: bool = False
 
     def __repr__(self):
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
@@ -223,33 +224,61 @@ class SampleGenerator:
         """
 
         if self.limit:
-            for deserialized_obj, _ in zip(self.indexed_file().read_all(), range(self.limit)):
-                yield TaggedDocument(*deserialized_obj)
+            # samples on disk
+            if not self.in_memory:
+                for deserialized_obj, _ in zip(
+                    self.indexed_file(shuffled=self.shuffled).read_all(), range(self.limit)
+                ):
+                    yield TaggedDocument(*deserialized_obj)
+
+            # samples in RAM
+            else:
+                if self.shuffled:
+                    self.rng.shuffle(self._sample_list)
+                yield from self._sample_list[: self.limit]
+
         else:
-            for deserialized_obj in self.indexed_file().read_all():
-                yield TaggedDocument(*deserialized_obj)
+            # samples on disk
+            if not self.in_memory:
+                for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
+                    yield TaggedDocument(*deserialized_obj)
+
+            # samples in RAM
+            else:
+                if self.shuffled:
+                    self.rng.shuffle(self._sample_list)
+                yield from self._sample_list
 
     def __getitem__(self, pos_idx: int | slice) -> TaggedDocument:
         """Doc."""
 
-        if isinstance(pos_idx, slice):
-            start, stop, step = pos_idx.indices(len(self))
-            pos_idxs: List[int] | range = range(start, stop, step)
-        else:
-            pos_idxs = [pos_idx]
+        # samples on disk
+        if not self.in_memory:
+            # handle slice objects
+            if isinstance(pos_idx, slice):
+                start, stop, step = pos_idx.indices(len(self))
+                pos_idxs: List[int] | range = range(start, stop, step)
+            else:
+                pos_idxs = [pos_idx]
 
-        samples = []
-        for pos_idx in pos_idxs:
-            with self.indexed_file(shuffled=False) as idx_input_file:
-                if (self.limit is None) or (pos_idx < self.limit):
-                    samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
-                else:
-                    raise IndexError(f"Limited to {self.limit} samples!")
+            # get samples by index/indices
+            samples = []
+            for pos_idx in pos_idxs:
+                with self.indexed_file(shuffled=False) as idx_input_file:
+                    if (self.limit is None) or (pos_idx < self.limit):
+                        samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
+                    else:
+                        raise IndexError(f"Limited to {self.limit} samples!")
 
-        if len(samples) > 1:
-            return samples
+            # if more than one sample, return as list
+            if len(samples) > 1:
+                return samples
+            else:
+                return samples[0]
+
+        # samples in RAM (regular list __getitem__)
         else:
-            return samples[0]
+            return self._sample_list[pos_idx]
 
     def __len__(self):
         """Doc."""
@@ -267,6 +296,24 @@ class SampleGenerator:
                 for _ in self.indexed_file().read_all():
                     len_ += 1
                 return len_
+
+    def _get_labels(self) -> List[str]:
+        """Get labels corresponding to the labels index"""
+
+        urls = [td.tags[0] for td in self]
+        url_label_dict = {}
+        with open(self.label_index_path, "r") as label_idx_file:
+            for line in label_idx_file:
+                _, url, label = json.loads(line.strip())
+                url_label_dict[url] = label
+
+        return [url_label_dict[url] for url in urls]
+
+    def load_to_memory(self):
+        """Doc."""
+
+        self._sample_list = list(self)
+        self.in_memory = True
 
 
 @dataclass
@@ -306,12 +353,11 @@ class CorpusProcessor:
         self.corpus_path = self.save_dir_path / "corpus.json"
         self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.json"
 
-        # Shuffle the paths (reproducible with seed)
-        if self.seed is not None:
-            random.seed(self.seed)
+        # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
+        self.rng = np.random.default_rng(self.seed)
 
     def __repr__(self):
-        return f"CorpusProcessor({len(self.total_samples):,} docs, seed={self.seed})"
+        return f"CorpusProcessor({self.total_samples:,} docs, seed={self.seed})"
 
     @timer(1000)
     def process(self, force=False, **kwargs):
@@ -347,10 +393,10 @@ class CorpusProcessor:
                     # Add to the dictionary
                     self.dct.add_documents([tokenized_doc])
                     # Create a TaggedDocument instance
-                    tagged_doc = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
+                    td = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
                     # Serialize the document tokens using pickle and write to the compressed file
-                    idx_output_file.write(tagged_doc)
-                print(" - Done.")
+                    idx_output_file.write(td, notes=td.tags)
+                print("Done.")
 
             # filter tokens
             print(
@@ -394,27 +440,21 @@ class CorpusProcessor:
         self.dct = Dictionary()
         with IndexedFile(self.corpus_path, "write") as idx_output_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-            for fidx, tagged_doc in enumerate(self.generate_samples()):
+            for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
                 if not (fidx + 1) % (self.total_samples / 10):
                     logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                 # remove tokens not in filtered Dictionary
-                filtered_tokens = [
-                    token_ for token_ in tagged_doc.words if fltrd_dct.token2id.get(token_)
-                ]
+                filtered_tokens = [token_ for token_ in td.words if fltrd_dct.token2id.get(token_)]
                 # Ignore very short/long documents
                 if min_tokens <= len(filtered_tokens) <= max_tokens:
                     # Add to the dictionary
                     self.dct.add_documents([filtered_tokens])
-                    tagged_doc = TaggedDocument(words=filtered_tokens, tags=tagged_doc.tags)
+                    td = TaggedDocument(words=filtered_tokens, tags=td.tags)
 
                     # Serialize the document tokens using pickle and write to file
-                    # TODO: why do I need the 'note=tagged_doc.tags[1]' if it is contained in the tags?
-                    try:
-                        idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
-                    except IndexError:
-                        idx_output_file.write(tagged_doc)
+                    idx_output_file.write(td, notes=td.tags)
 
                 else:
                     n_docs_filtered += 1
@@ -436,27 +476,22 @@ class CorpusProcessor:
             )
             with IndexedFile(self.labeled_corpus_path, "write") as idx_output_file:
                 # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-                for fidx, tagged_doc in enumerate(self.generate_samples()):
+                for fidx, td in enumerate(self.generate_samples()):
                     # Track progress visually
                     if not (fidx + 1) % (self.total_samples / 10):
                         logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                     # add label if available in `tag_label_dict`
-                    with suppress(KeyError):
+                    try:
                         # always insert after first tag (URL)
-                        tagged_doc.tags.insert(1, tag_label_dict[tagged_doc.tags[0]])
-                        # remove all but the first 2 tags, second being the label
-                        while len(tagged_doc.tags) > 2:
-                            tagged_doc.tags.pop()
+                        td.tags.insert(1, tag_label_dict[td.tags[0]])
+                    except KeyError:
+                        td.tags.insert(1, "unlabeled")
 
                     # Serialize the document tokens using pickle and write to file
-                    # TODO: why do I need the 'note=tagged_doc.tags[1]' if it is contained in the tags?
-                    try:
-                        idx_output_file.write(tagged_doc, note=tagged_doc.tags[1])
-                    except IndexError:
-                        idx_output_file.write(tagged_doc)
+                    idx_output_file.write(td, notes=td.tags)
 
-                print(" - Done.")
+                print("Done.")
 
     @timer(1000)
     def generate_train_test_sets(  # noqa: C901
@@ -465,7 +500,8 @@ class CorpusProcessor:
         n_samples: int = None,
         test_frac: float = 0.2,
         labeled=False,
-        shuffled=False,
+        shuffled_idx=False,
+        shuffled_gen=False,
     ):
         """
         Generate training and testing sets from the processed data.
@@ -494,15 +530,10 @@ class CorpusProcessor:
             with open(file_idx_path, "r") as idx_file:
                 while True:
                     try:
-                        start_pos, note = json.loads(idx_file.readline())
-                        index_dict[note].append(start_pos)
+                        start_pos, _, label = json.loads(idx_file.readline())
+                        index_dict[label].append(start_pos)
                     except json.JSONDecodeError:
                         break
-
-            # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled:
-                for start_pos_list in index_dict.values():
-                    random.shuffle(start_pos_list)
 
             # Calculate the number of "good," "bad," and "unlabeled" policies in training set (stratified)
             label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
@@ -543,6 +574,11 @@ class CorpusProcessor:
             else:
                 test_start_positions = []
 
+            # Shuffle the index (optional) - this means choosing different train/test sets
+            if shuffled_idx:
+                self.rng.shuffle(train_start_positions)
+                self.rng.shuffle(test_start_positions)
+
         # all unlabeled
         else:
             # Get the entire file index as a list
@@ -556,20 +592,27 @@ class CorpusProcessor:
                         break
 
             # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled:
-                random.shuffle(index_list)
+            if shuffled_idx:
+                self.rng.shuffle(index_list)
 
             # create train/test file indices
             train_start_positions = index_list[:n_train]
             test_start_positions = index_list[n_train:n_samples]
 
         # Initialize re-generators
+        label_index_path = get_file_index_path(self.labeled_corpus_path)
         if not test_start_positions:
-            return SampleGenerator(fpath, train_start_positions, limit=n_samples)
-        else:
-            return SampleGenerator(fpath, train_start_positions), SampleGenerator(
-                fpath, test_start_positions
+            return SampleGenerator(
+                fpath,
+                label_index_path,
+                train_start_positions,
+                shuffled=shuffled_gen,
+                limit=n_samples,
             )
+        else:
+            return SampleGenerator(
+                fpath, label_index_path, train_start_positions, shuffled=shuffled_gen
+            ), SampleGenerator(fpath, label_index_path, test_start_positions, shuffled=shuffled_gen)
 
     def generate_samples(self, *args, **kwargs):
         """

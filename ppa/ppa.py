@@ -200,7 +200,7 @@ class SampleGenerator:
     def labels(self):
         """Doc."""
 
-        return self._get_labels()
+        return self._labels or self._get_labels()
 
     def __post_init__(self, index_suffix: str):
         """Doc."""
@@ -214,6 +214,7 @@ class SampleGenerator:
             index_suffix,
         )
         self.in_memory: bool = False
+        self._labels: List[str] = []
 
     def __repr__(self):
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"

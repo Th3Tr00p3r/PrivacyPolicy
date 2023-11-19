@@ -763,53 +763,73 @@ raise RuntimeError("STOP HERE!")
 
 # %%
 from sklearn.base import BaseEstimator
-from sklearn.svm import OneClassSVM
+from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import MinMaxScaler
+import psutil
 import logging
 
+from ppa.utils import timer
 
-class Doc2VecOneClassSVMEstimator(BaseEstimator):
+
+class Doc2VecIsolationForestEstimator:
     """Doc."""
 
     def __init__(
         self,
+        # Doc2Vec kwargs
+        vec_model=None,
         vector_size: int = 300,
-        epochs: int = 10,
         dm: int = 1,
         window: int = 5,
         min_count: int = 0,
         sample: float = 0.0,
         hs: int = 1,
         negative: float = 0.0,
-        kernel: str = "rbf",
-        gamma: str | float = "scale",
-        coef0: float = 0.0,
-        nu: float = 0.5,
-        tol: float = 0.001,
-        shrinking: bool = True,
-        degree: int = 3,
+        # IsolationForest kwargs
+        clf_model=None,
+        n_estimators: int = 100,
+        contamination: str | float = "auto",
+        max_samples: int | str = "auto",
+        max_features: int | float = 1.0,
+        bootstrap: bool = False,
+        verbose: int = 1,
+        warm_start: bool = True,
+        n_jobs: int = psutil.cpu_count(logical=False) - 1,
+        # custom parameters
+        epochs: int = 10,
+        random_state: int = None,
+        onlne_learning: bool = True,
     ):
-        # vec params
-        self.vec_model = None
-        self.vector_size: int = vector_size
-        self.epochs: int = epochs
-        self.dm: int = dm
-        self.window: int = window
-        self.min_count: int = min_count
-        self.sample = sample
-        self.hs: int = hs
-        self.negative: float = negative
 
-        # clf params
-        self.clf_model = None
-        self.kernel = kernel
-        self.gamma = gamma
-        self.degree = degree
-        self.coef0 = coef0
-        self.tol = tol
-        self.nu = nu
-        self.shrinking = shrinking
+        self.onlne_learning = onlne_learning
+        self.epochs = epochs
 
+        logging.info(f"[Estimator.__init__] Initializing models...")
+        # Initialize both models
+        self.vec_model = vec_model or Doc2Vec(
+            vector_size=vector_size,
+            dm=dm,
+            window=window,
+            min_count=min_count,
+            sample=sample,
+            hs=hs,
+            negative=negative,
+            seed=random_state,
+        )
+
+        self.clf_model = clf_model or IsolationForest(
+            n_estimators=n_estimators,
+            contamination=contamination,
+            max_samples=max_samples,
+            max_features=max_features,
+            bootstrap=bootstrap,
+            random_state=random_state,
+            verbose=verbose,
+            warm_start=warm_start,
+            n_jobs=n_jobs,
+        )
+
+    @timer(1000)
     def fit(self, X, y):
         """Doc."""
 
@@ -817,92 +837,138 @@ class Doc2VecOneClassSVMEstimator(BaseEstimator):
         self.y_train = self.labels_to_arr(y)
 
         # Count and display the amount of samples for each label
-        logging.info(f"[Doc2VecOneClassSVMEstimator.fit] label_counter: {Counter(y)}")
+        logging.info(f"[Estimator.fit] label_counter: {Counter(y)}")
 
-        # Initialize and train a Doc2Vec model on the entire, sparsely labeled dataset
-        logging.info(f"[Doc2VecOneClassSVMEstimator.fit] Initialzing and training Doc2Vec model...")
-        self.vec_model = Doc2Vec(
-            vector_size=self.vector_size,
-            epochs=self.epochs,
-            dm=self.dm,
-            window=self.window,
-            min_count=self.min_count,
-            sample=self.sample,
-            hs=self.hs,
-            negative=self.negative,
-        )
+        # build vocabulary for Doc2Vec
         self.vec_model.build_vocab(X)
-        self.vec_model.train(X, total_examples=model.corpus_count, epochs=model.epochs)
 
-        # transform the initial features into vectors
-        logging.info(
-            f"[Doc2VecOneClassSVMEstimator.fit] Transforming X to learned vector embeddings..."
-        )
-        #         self.X_train_vec = np.array([self.vec_model.dv[td.tags[0]] for td in X])
-        self.X_train_vec = self.vec_transform(X)
+        # Training begins
+        if self.onlne_learning:
+            # get increasing estimator in logarithmic fashion, e.g. [ 500,  575,  643,  707,  766,  820,  871,  917,  960, 1000]
+            start_val = self.clf_model.n_estimators // 2
+            stop_val = self.clf_model.n_estimators
+            n_estimators_list = np.hstack(
+                (
+                    [start_val],
+                    np.cumsum(
+                        np.flip(
+                            np.diff(np.flip(np.geomspace(stop_val, start_val, epochs, dtype=int)))
+                        )
+                    )
+                    + start_val,
+                )
+            )
 
-        # Filter only the "bad" (majority) labeled vectors for training the OneClassSVM model
-        bad_logical_idxs = self.y_train == 0
-        X_vec_bad = self.X_train_vec[bad_logical_idxs]
+            self.vec_loss = []
+            for epoch in range(self.epochs):
+                # train a Doc2Vec model on the entire, sparsely labeled dataset
+                logging.info(f"[Estimator.fit] [epoch {epoch}] Training Doc2Vec model...")
+                self.vec_model.train(X, total_examples=self.vec_model.corpus_count, epochs=1)
+                self.vec_loss.append(self.vec_model.get_latest_training_loss())
+                logging.info(
+                    f"[Estimator.fit] [epoch {epoch}] vec_loss: {self.vec_loss[epoch]:.2e}"
+                )
 
-        # Initialize and train the OneClassSVM model using the "bad" (majority) labels
-        logging.info(
-            f"[Doc2VecOneClassSVMEstimator.fit] Fitting OneClassSVM model to {bad_logical_idxs.sum():,} 'bad'-labeled vectors..."
-        )
-        self.clf_model = OneClassSVM(
-            kernel=self.kernel,
-            gamma=self.gamma,
-            degree=self.degree,
-            coef0=self.coef0,
-            tol=self.tol,
-            nu=self.nu,
-            shrinking=self.shrinking,
-        )
-        self.clf_model.fit(X_vec_bad)
+                # transform the documents into vectors
+                logging.info(f"[Estimator.fit] [epoch {epoch}] Inferring vector embeddings...")
+                self.X_train_vec = self.vec_transform(X)
+
+                #             # Filter only the "bad" (majority) labeled vectors for training the IsolationForest model
+                #             bad_logical_idxs = (self.y_train == 1)
+                #             X_vec_bad = self.X_train_vec[bad_logical_idxs]
+
+                #             # Train the IsolationForest model using the "bad" (majority) labels
+                #             logging.info(f"[Estimator.fit] [epoch {epoch}] Fitting IsolationForest model to {bad_logical_idxs.sum():,} 'bad'-labeled vectors...")
+
+                # Train the IsolationForest model using the all samples
+                logging.info(
+                    f"[Estimator.fit] [epoch {epoch}] Fitting IsolationForest model to {self.X_train_vec.shape[0]:,} vector samples..."
+                )
+
+                # Increase the number of trees in IsolationForest according to predetermined list of values
+                self.clf_model.set_params(n_estimators=n_estimators_list[epoch])
+                logging.info(
+                    f"[Estimator.fit] [epoch {epoch}] IsolationForest.n_estimators: {self.clf_model.n_estimators}"
+                )
+                self.clf_model.fit(self.X_train_vec)
+
+        else:
+            # train a Doc2Vec model on the entire, sparsely labeled dataset
+            logging.info(f"[Estimator.fit] Training Doc2Vec model...")
+            self.vec_model.train(X, total_examples=self.vec_model.corpus_count, epochs=self.epochs)
+            self.vec_loss = [self.vec_model.get_latest_training_loss()]
+            logging.info(f"[Estimator.fit] vec_loss: {self.vec_loss[0]:.2e}")
+
+            # transform the documents into vectors
+            logging.info(f"[Estimator.fit] Inferring vector embeddings...")
+            self.X_train_vec = self.vec_transform(X)
+
+            #             # Filter only the "bad" (majority) labeled vectors for training the IsolationForest model
+            #             bad_logical_idxs = (self.y_train == 1)
+            #             X_vec_bad = self.X_train_vec[bad_logical_idxs]
+
+            #             # Train the IsolationForest model using the "bad" (majority) labels
+            #             logging.info(f"[Estimator.fit] [epoch {epoch}] Fitting IsolationForest model to {bad_logical_idxs.sum():,} 'bad'-labeled vectors...")
+
+            # Train the IsolationForest model using the all samples
+            logging.info(
+                f"[Estimator.fit] Fitting IsolationForest model to {self.X_train_vec.shape[0]:,} vector samples..."
+            )
+            self.clf_model.fit(self.X_train_vec)
 
         return self
 
+    @timer(1000)
     def predict(self, X):
         """Doc."""
 
         # transform X
+        logging.info(f"[Estimator.predict] Inferring vector embeddings...")
         X_vec = self.vec_transform(X)
 
         # return classifier prediction
-        logging.info(f"[Doc2VecOneClassSVMEstimator.predict] Predicting...")
+        logging.info(f"[Estimator.predict] Predicting...")
         return self.clf_model.predict(X_vec)
 
+    @timer(1000)
     def score(self, X, y):
         """Doc."""
 
-        # transform X
-        X_vec = self.vec_transform(X)
+        # transform X, y
+        logging.info(f"[Estimator.score] Inferring vector embeddings...")
+        X_test_vec = self.vec_transform(X)
+        y_test = self.labels_to_arr(y)
+
+        # Calculate _vec_score
+        vec_score = self._vec_score(X_test_vec, y_test)
+        logging.info(f"[Estimator.score] vec_score: {vec_score}")
 
         # Calculate scores
-        logging.info(f"[Doc2VecOneClassSVMEstimator.score] Calculating score...")
-        y_scores = self.clf_model.decision_function(X_vec)
-        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_scores[:10]: {y_scores[:10]}")
+        logging.info(f"[Estimator.score] Calculating score...")
+        y_scores = self.clf_model.decision_function(X_test_vec)
+        logging.info(f"[Estimator.score] y_scores[:10]: {y_scores[:10]}")
 
-        # Normalize scores using min-max scaling, using labeled + unlabeled samples
-        scaler = MinMaxScaler((-5, 5))
-        y_scores_norm = scaler.fit_transform(y_scores.reshape(-1, 1)).flatten()
-        logging.info(
-            f"[Doc2VecOneClassSVMEstimator.score] y_scores_norm[:10]: {y_scores_norm[:10]}"
-        )
+        #         # Normalize scores using min-max scaling, using labeled + unlabeled samples
+        #         scaler = MinMaxScaler((-6, 6))
+        #         y_scores_norm = scaler.fit_transform(y_scores.reshape(-1, 1)).flatten()
+        #         logging.info(f"[Estimator.score] y_scores_norm[:10]: {y_scores_norm[:10]}")
 
-        # Transform normalized scores using sigmoid function
-        y_probs = expit(y_scores_norm)
+        #         # Transform normalized scores to probabilities using sigmoid function
+        #         y_scores = expit(y_scores_norm)
 
         # ignore unlabeled samples
-        y_test = self.labels_to_arr(y)
         labeled_idxs = ~np.isnan(y_test)
-        y_probs = y_probs[labeled_idxs]
-        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_probs[:10]: {y_probs[:10]}")
+        y_scores = y_scores[labeled_idxs]
+        logging.info(f"[Estimator.score] y_scores[:10]: {y_scores[:10]}")
         y_true = y_test[labeled_idxs]
-        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_true[:10]: {y_true[:10]}")
+        logging.info(f"[Estimator.score] y_true[:10]: {y_true[:10]}")
+
+        #         # predict outliers for labeled samples
+        #         logging.info(f"[Estimator.score] Predicting (TESTESTEST)...")
+        #         y_pred = self.clf_model.predict(X_test_vec[labeled_idxs])
 
         # Compute the precision-recall curve
-        precision, recall, _ = precision_recall_curve(y_true, y_probs)
+        precision, recall, _ = precision_recall_curve(y_true, y_scores)
 
         # Calculate the AUC-PR
         auc_pr = auc(recall, precision)
@@ -911,50 +977,46 @@ class Doc2VecOneClassSVMEstimator(BaseEstimator):
     def labels_to_arr(self, y):
         """Doc."""
 
-        conv_dict = dict(unlabeled=np.nan, good=1, bad=0)
+        conv_dict = dict(unlabeled=np.nan, good=-1, bad=1)
         return np.array([conv_dict[label] for label in y])
 
     def vec_transform(self, X):
         """Doc."""
 
-        logging.info(f"[Doc2VecOneClassSVMEstimator.vec_transform] Inferring vectors...")
-        return np.array([self.vec_model.infer_vector(td.words) for td in X])
+        return np.array([self.vec_model.infer_vector(td.words, epochs=self.epochs) for td in X])
 
-    def vec_score(self, X, y):
+    def _vec_score(self, X_test_vec, y_test):
         """Compute the AUC-PR score specifically for the Doc2Vec part of the model"""
 
         # Get indices for good and bad training vectors
-        good_logical_idxs = self.y_train == 1
-        bad_logical_idxs = self.y_train == 0
+        good_logical_idxs = self.y_train == -1
+        bad_logical_idxs = self.y_train == 1
 
         # Compute mean vectors from the training set
         mean_good_train_vector = self.X_train_vec[good_logical_idxs].mean(axis=0)
         mean_bad_train_vector = self.X_train_vec[bad_logical_idxs].mean(axis=0)
 
         # Use mean_good_train_vector and mean_bad_train_vector to compute scores
-        y_test = self.labels_to_arr(y)
-        all_X_vec = self.vec_transform(X)
-
-        good_sims = cosine_similarity(all_X_vec, mean_good_train_vector.reshape(1, -1))
-        bad_sims = cosine_similarity(all_X_vec, mean_bad_train_vector.reshape(1, -1))
+        good_sims = cosine_similarity(X_test_vec, mean_good_train_vector.reshape(1, -1))
+        bad_sims = cosine_similarity(X_test_vec, mean_bad_train_vector.reshape(1, -1))
         similarity_diff = good_sims - bad_sims
         all_similarities = list(zip(similarity_diff.ravel(), np.nan_to_num(y_test)))
 
         # Extract scores for labeled and unlabeled vectors
         all_scores = np.array([sim[0] for sim in all_similarities]).reshape(-1, 1)
         logging.info(
-            f"[Doc2VecOneClassSVMEstimator.vec_score] raw all scores min/max: {(min(all_scores), max(all_scores))}"
+            f"[Estimator.vec_score] raw all scores min/max: {(min(all_scores), max(all_scores))}"
         )
 
         # Fit MinMaxScaler for normalization using both labeled and unlabeled scores
-        scaler = MinMaxScaler((-5, 5)).fit(all_scores)
+        scaler = MinMaxScaler((-6, 6)).fit(all_scores)
 
         # Extract y_true and normalized_labeled_scores for labeled vectors
         labeled_logical_idxs = ~np.isnan(y_test)
         y_labeled_true = y_test[labeled_logical_idxs]
         labeled_scores = all_scores[labeled_logical_idxs.ravel()]
         logging.info(
-            f"[Doc2VecOneClassSVMEstimator.vec_score] raw labeled_scores min/max: {(min(labeled_scores), max(labeled_scores))}"
+            f"[Estimator.vec_score] raw labeled_scores min/max: {(min(labeled_scores), max(labeled_scores))}"
         )
 
         # Apply normalization to labeled scores
@@ -962,9 +1024,7 @@ class Doc2VecOneClassSVMEstimator(BaseEstimator):
 
         # Transform normalized scores using sigmoid function
         y_labeled_probs = expit(normalized_labeled_scores)
-        logging.info(
-            f"[Doc2VecOneClassSVMEstimator.vec_score] y_labeled_probs[:10]: {y_labeled_probs[:10]}"
-        )
+        logging.info(f"[Estimator.vec_score] y_labeled_probs[:10]: {y_labeled_probs[:10]}")
 
         # Compute AUC-PR using only normalized scores for labeled vectors
         precision, recall, _ = precision_recall_curve(y_labeled_true, y_labeled_probs)
@@ -978,15 +1038,8 @@ class Doc2VecOneClassSVMEstimator(BaseEstimator):
 # %%
 N = 5_000
 
-estimator = Doc2VecOneClassSVMEstimator()
+estimator = Doc2VecIsolationForestEstimator(random_state=cp.seed, onlne_learning=False)
 estimator.fit(train_set[:N], train_set.labels[:N])
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %%
-vec_score = estimator.vec_score(test_set[:N], test_set.labels[:N])
-print("vec_score: ", vec_score)
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
@@ -999,7 +1052,41 @@ print("score: ", score)
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
-estimator.predict(test_set[:1000]).sum()
+# TESTESTEST - trying to get "accuracy"
+
+# predict outliers for labeled samples
+y_test = estimator.labels_to_arr(train_set.labels[:N])
+labeled_idxs = ~np.isnan(y_test)
+y_test_labeled = y_test[labeled_idxs]
+X_test_labeled = [train_set[:N][idx] for idx in np.nonzero(labeled_idxs)[0]]
+y_pred_labeled = estimator.predict(X_test_labeled)
+
+# calculate individual accuracies
+good_idxs = y_test_labeled == -1
+bad_idxs = y_test_labeled == 1
+good_accuracy = (
+    sum(y_pred_labeled[good_idxs] == y_test_labeled[good_idxs]) / y_test_labeled[good_idxs].size
+)
+bad_accuracy = (
+    sum(y_pred_labeled[bad_idxs] == y_test_labeled[bad_idxs]) / y_test_labeled[bad_idxs].size
+)
+
+print(f"ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+# TESTESTEST
+
+good_accuracy = (
+    sum(y_pred_labeled[good_idxs] == y_test_labeled[good_idxs]) / y_test_labeled[good_idxs].size
+)
+bad_accuracy = (
+    sum(y_pred_labeled[bad_idxs] == y_test_labeled[bad_idxs]) / y_test_labeled[bad_idxs].size
+)
+
+print(f"ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
 
 # %% [markdown]
 # ## Hyperparameter Search
@@ -1056,7 +1143,7 @@ param_dist = {
 
 # Update the hyperparameter search to use the pipeline
 halving_random_search = HalvingRandomSearchCV(
-    estimator=Doc2VecOneClassSVMEstimator(),
+    estimator=Doc2VecIsolationForestEstimator(random_state=cp.seed),
     param_distributions=param_dist,
     n_candidates="exhaust",
     verbose=1,

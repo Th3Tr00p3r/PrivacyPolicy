@@ -755,40 +755,73 @@ with Plotter(
 raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
-# ## 5.4 Hyperparameter Search
+# # 6. Attaching a Classifier
+# It seems that the Doc2Vec model by itself is not doing a good job separating good privacy policies from bad ones. I can try using the vector embeddings as features for a binary classifier. Since I already have an estimator class for Doc2Vec, it should have been relatively easy to create a pipeline and attach more estimators. Unfortunately, since sklearn.pipeline.Pipeline doens't transform y (targets/labels) during fitting, I would have to implement a custom pipeline.
 
 # %% [markdown]
-# Define a custom Doc2Vec estimator which would work with my SampleGenerator class
+# Define a custom Doc2Vec + OneClassSVM estimator which would work with my SampleGenerator class
 
 # %%
-from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.base import BaseEstimator
+from sklearn.svm import OneClassSVM
+from sklearn.preprocessing import MinMaxScaler
 import logging
 
 
-class Doc2VecEstimator(BaseEstimator, TransformerMixin):
+class Doc2VecOneClassSVMEstimator(BaseEstimator):
     """Doc."""
 
-    def __init__(self, vector_size, epochs, dm, window, min_count, sample, hs, negative):
-        self.vector_size = vector_size
-        self.epochs = epochs
-        self.dm = dm
-        self.window = window
-        self.min_count = min_count
+    def __init__(
+        self,
+        vector_size: int = 300,
+        epochs: int = 10,
+        dm: int = 1,
+        window: int = 5,
+        min_count: int = 0,
+        sample: float = 0.0,
+        hs: int = 1,
+        negative: float = 0.0,
+        kernel: str = "rbf",
+        gamma: str | float = "scale",
+        coef0: float = 0.0,
+        nu: float = 0.5,
+        tol: float = 0.001,
+        shrinking: bool = True,
+        degree: int = 3,
+    ):
+        # vec params
+        self.vec_model = None
+        self.vector_size: int = vector_size
+        self.epochs: int = epochs
+        self.dm: int = dm
+        self.window: int = window
+        self.min_count: int = min_count
         self.sample = sample
-        self.hs = hs
-        self.negative = negative
-        self.model = None
-        self.mean_good_train_vector = None
-        self.mean_bad_train_vector = None
+        self.hs: int = hs
+        self.negative: float = negative
 
-    def fit(self, X, y=None):
+        # clf params
+        self.clf_model = None
+        self.kernel = kernel
+        self.gamma = gamma
+        self.degree = degree
+        self.coef0 = coef0
+        self.tol = tol
+        self.nu = nu
+        self.shrinking = shrinking
+
+    def fit(self, X, y):
         """Doc."""
 
-        logging.info(f"[Doc2VecEstimator.fit] len(X): {len(X)}")
-        label_counter = Counter([td.tags[1] if len(td.tags) > 1 else "unlabeled" for td in X])
-        logging.info(f"[Doc2VecEstimator.fit] label_counter: {label_counter}")
+        # convert and keep labels as Numpy array
+        self.y_train = self.labels_to_arr(y)
 
-        model = Doc2Vec(
+        # Count and display the amount of samples for each label
+        logging.info(f"[Doc2VecOneClassSVMEstimator.fit] label_counter: {Counter(y)}")
+
+        # Initialize and train a Doc2Vec model on the entire, sparsely labeled dataset
+        logging.info(f"[Doc2VecOneClassSVMEstimator.fit] Initialzing and training Doc2Vec model...")
+        self.vec_model = Doc2Vec(
             vector_size=self.vector_size,
             epochs=self.epochs,
             dm=self.dm,
@@ -798,141 +831,179 @@ class Doc2VecEstimator(BaseEstimator, TransformerMixin):
             hs=self.hs,
             negative=self.negative,
         )
-        model.build_vocab(X)
-        model.train(X, total_examples=model.corpus_count, epochs=model.epochs)
-        self.model = model
+        self.vec_model.build_vocab(X)
+        self.vec_model.train(X, total_examples=model.corpus_count, epochs=model.epochs)
 
-        #         # Compute mean vectors from the training set
-        #         train_vectors, train_tags = zip(*[(self.model.dv[td.tags[0]], td.tags) for td in X])
-        #         #         logging.info(f"{train_tags}")
-        #         self.mean_good_train_vector = np.array(
-        #             [
-        #                 vec
-        #                 for vec, tags in zip(train_vectors, train_tags)
-        #                 if len(tags) > 1 and tags[1] == "good"
-        #             ]
-        #         ).mean(axis=0)
-        #         self.mean_bad_train_vector = np.array(
-        #             [
-        #                 vec
-        #                 for vec, tags in zip(train_vectors, train_tags)
-        #                 if len(tags) > 1 and tags[1] == "bad"
-        #             ]
-        #         ).mean(axis=0)
+        # transform the initial features into vectors
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.fit] Transforming X to learned vector embeddings..."
+        )
+        #         self.X_train_vec = np.array([self.vec_model.dv[td.tags[0]] for td in X])
+        self.X_train_vec = self.vec_transform(X)
+
+        # Filter only the "bad" (majority) labeled vectors for training the OneClassSVM model
+        bad_logical_idxs = self.y_train == 0
+        X_vec_bad = self.X_train_vec[bad_logical_idxs]
+
+        # Initialize and train the OneClassSVM model using the "bad" (majority) labels
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.fit] Fitting OneClassSVM model to {bad_logical_idxs.sum():,} 'bad'-labeled vectors..."
+        )
+        self.clf_model = OneClassSVM(
+            kernel=self.kernel,
+            gamma=self.gamma,
+            degree=self.degree,
+            coef0=self.coef0,
+            tol=self.tol,
+            nu=self.nu,
+            shrinking=self.shrinking,
+        )
+        self.clf_model.fit(X_vec_bad)
 
         return self
 
-    def transform(self, X, y=None):
+    def predict(self, X):
         """Doc."""
 
-        labeled_vectors = np.array([model.infer_vector(td.words) for td in X])
-        logging.info(f"[Doc2VecEstimator.transform] labeled_vectors.shape: {labeled_vectors.shape}")
-        return labeled_vectors
+        # transform X
+        X_vec = self.vec_transform(X)
 
-    def fit_transform(self, X, y=None):
+        # return classifier prediction
+        logging.info(f"[Doc2VecOneClassSVMEstimator.predict] Predicting...")
+        return self.clf_model.predict(X_vec)
+
+    def score(self, X, y):
         """Doc."""
 
-        self.fit(X, y)
-        return self.transform(X, y)
+        # transform X
+        X_vec = self.vec_transform(X)
 
-    def score(self, X, y=None):
-        """Compute the AUC-PR score on the test set."""
+        # Calculate scores
+        logging.info(f"[Doc2VecOneClassSVMEstimator.score] Calculating score...")
+        y_scores = self.clf_model.decision_function(X_vec)
+        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_scores[:10]: {y_scores[:10]}")
 
-        logging.info(f"[Doc2VecEstimator.score] len(X): {len(X)}")
-
-        # Use self.mean_good_train_vector and self.mean_bad_train_vector to compute scores
-        labeled_test_vectors, labeled_test_tags = zip(
-            *[(self.model.infer_vector(td.words), td.tags) for td in X if len(td.tags) > 1]
-        )
-        labeled_test_vectors = np.array(labeled_test_vectors)
-
-        # Calculating similarities
-        good_similarities = {}
-        for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
-            good_sim = cosine_similarity([test_policy_vector], [mean_good_train_vector])[0][0]
-            bad_sim = cosine_similarity([test_policy_vector], [mean_bad_train_vector])[0][0]
-            good_similarities[test_tag[0]] = (
-                (good_sim - bad_sim),
-                test_tag[1],
-            )
-
-        # Calculating test sample scores
-        y_true, y_scores = zip(
-            *[(true_label == "good", score) for score, true_label in good_similarities.values()]
+        # Normalize scores using min-max scaling, using labeled + unlabeled samples
+        scaler = MinMaxScaler((-5, 5))
+        y_scores_norm = scaler.fit_transform(y_scores.reshape(-1, 1)).flatten()
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.score] y_scores_norm[:10]: {y_scores_norm[:10]}"
         )
 
-        # Compute AUC-PR
-        precision, recall, _ = precision_recall_curve(y_true, y_scores)
+        # Transform normalized scores using sigmoid function
+        y_probs = expit(y_scores_norm)
+
+        # ignore unlabeled samples
+        y_test = self.labels_to_arr(y)
+        labeled_idxs = ~np.isnan(y_test)
+        y_probs = y_probs[labeled_idxs]
+        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_probs[:10]: {y_probs[:10]}")
+        y_true = y_test[labeled_idxs]
+        logging.info(f"[Doc2VecOneClassSVMEstimator.score] y_true[:10]: {y_true[:10]}")
+
+        # Compute the precision-recall curve
+        precision, recall, _ = precision_recall_curve(y_true, y_probs)
+
+        # Calculate the AUC-PR
+        auc_pr = auc(recall, precision)
+        return auc_pr
+
+    def labels_to_arr(self, y):
+        """Doc."""
+
+        conv_dict = dict(unlabeled=np.nan, good=1, bad=0)
+        return np.array([conv_dict[label] for label in y])
+
+    def vec_transform(self, X):
+        """Doc."""
+
+        logging.info(f"[Doc2VecOneClassSVMEstimator.vec_transform] Inferring vectors...")
+        return np.array([self.vec_model.infer_vector(td.words) for td in X])
+
+    def vec_score(self, X, y):
+        """Compute the AUC-PR score specifically for the Doc2Vec part of the model"""
+
+        # Get indices for good and bad training vectors
+        good_logical_idxs = self.y_train == 1
+        bad_logical_idxs = self.y_train == 0
+
+        # Compute mean vectors from the training set
+        mean_good_train_vector = self.X_train_vec[good_logical_idxs].mean(axis=0)
+        mean_bad_train_vector = self.X_train_vec[bad_logical_idxs].mean(axis=0)
+
+        # Use mean_good_train_vector and mean_bad_train_vector to compute scores
+        y_test = self.labels_to_arr(y)
+        all_X_vec = self.vec_transform(X)
+
+        good_sims = cosine_similarity(all_X_vec, mean_good_train_vector.reshape(1, -1))
+        bad_sims = cosine_similarity(all_X_vec, mean_bad_train_vector.reshape(1, -1))
+        similarity_diff = good_sims - bad_sims
+        all_similarities = list(zip(similarity_diff.ravel(), np.nan_to_num(y_test)))
+
+        # Extract scores for labeled and unlabeled vectors
+        all_scores = np.array([sim[0] for sim in all_similarities]).reshape(-1, 1)
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.vec_score] raw all scores min/max: {(min(all_scores), max(all_scores))}"
+        )
+
+        # Fit MinMaxScaler for normalization using both labeled and unlabeled scores
+        scaler = MinMaxScaler((-5, 5)).fit(all_scores)
+
+        # Extract y_true and normalized_labeled_scores for labeled vectors
+        labeled_logical_idxs = ~np.isnan(y_test)
+        y_labeled_true = y_test[labeled_logical_idxs]
+        labeled_scores = all_scores[labeled_logical_idxs.ravel()]
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.vec_score] raw labeled_scores min/max: {(min(labeled_scores), max(labeled_scores))}"
+        )
+
+        # Apply normalization to labeled scores
+        normalized_labeled_scores = scaler.transform(labeled_scores)
+
+        # Transform normalized scores using sigmoid function
+        y_labeled_probs = expit(normalized_labeled_scores)
+        logging.info(
+            f"[Doc2VecOneClassSVMEstimator.vec_score] y_labeled_probs[:10]: {y_labeled_probs[:10]}"
+        )
+
+        # Compute AUC-PR using only normalized scores for labeled vectors
+        precision, recall, _ = precision_recall_curve(y_labeled_true, y_labeled_probs)
         auc_pr = auc(recall, precision)
         return auc_pr
 
 
 # %% [markdown]
+# Trying to fit a fraction of the data for testing
+
+# %%
+N = 5_000
+
+estimator = Doc2VecOneClassSVMEstimator()
+estimator.fit(train_set[:N], train_set.labels[:N])
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+vec_score = estimator.vec_score(test_set[:N], test_set.labels[:N])
+print("vec_score: ", vec_score)
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+score = estimator.score(test_set[:N], test_set.labels[:N])
+print("score: ", score)
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+estimator.predict(test_set[:1000]).sum()
+
+# %% [markdown]
+# ## Hyperparameter Search
 # Perform search to find best set of hyperparametes
-
-# %%
-# from sklearn.experimental import enable_halving_search_cv  # noqa
-# from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold
-# from scipy.stats import randint, uniform
-# # import psutil
-
-# # Create a larger parameter grid with more combinations
-# param_dist = {
-#     "vector_size": randint(150, 601),  # Random integer between 50 and 400
-#     "epochs": randint(5, 21),  # Random integer between 10 and 40
-#     "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
-#     "window": randint(4, 13),
-# #     "min_count": randint(0, 6),
-# #     "sample": uniform(1e-7, 1e-5),
-#     "hs": [0, 1],
-# }
-
-# # Create HalvingRandomSearchCV object with the custom estimator
-# halving_random_search = HalvingRandomSearchCV(
-#     estimator=Doc2VecEstimator(
-#         vector_size=100, epochs=10, dm=1, window=5, min_count=1, sample=1e-5, hs=0, negative=0,
-#     ),
-#     param_distributions=param_dist,
-#     n_candidates="exhaust",
-#     verbose=1,
-#     random_state=cp.seed,
-#     cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=cp.seed),
-#     min_resources=15000,
-# #     n_jobs=psutil.cpu_count(logical=False) - 1,
-# )
-
-# # Fit the hyperparameter search on your training data
-# tic = time.perf_counter()
-# # print("Loading training set to memory... ", end="")
-# # hps_train_set = deepcopy(train_set)
-# # hps_train_set.load_to_memory()
-# # print("Done.")
-# print("Starting search...")
-# # halving_random_search.fit(hps_train_set, hps_train_set.labels)
-# halving_random_search.fit(train_set, train_set.labels)
-# print(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
-
-# # Get the best hyperparameters and model
-# best_params = halving_random_search.best_params_
-# best_model = halving_random_search.best_estimator_
-
-# # Print the best hyperparameters
-# print("Best Hyperparameters:", best_params)
-
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
-# ## 5.5 Final Evaluation of Doc2Vec Model Using Best Hyperparameters
-
-# %%
-# # Get the AUC-PR score of the best model on the test set
-# best_model_score = best_model.score(test_set)
-# print("Best Model Score:", best_model_score)
-
-# %% [markdown]
-# # 6. Attaching a Classifier
-# It seems that the Doc2Vec model by itself is not doing a good job separating good privacy policies from bad ones. I can try using the vector embeddings as features for a binary classifier. Since I already have an estimator class for Doc2Vec, it should have been relatively easy to create a pipeline and attach more estimators. Unfortunately, since sklearn.pipeline.Pipeline doens't transform y (targets/labels) during fitting, I would have to implement a custom pipeline.
 
 # %%
 # # TEST
@@ -964,101 +1035,33 @@ class Doc2VecEstimator(BaseEstimator, TransformerMixin):
 # logging.info(f"Data after step 3 shape: {data_step3.shape}")
 
 # %%
-from sklearn.pipeline import Pipeline
 from sklearn.experimental import enable_halving_search_cv  # noqa
 from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold
-from sklearn.feature_selection import SelectFromModel
-from sklearn.svm import LinearSVC, OneClassSVM
 from scipy.stats import randint, uniform
-from sklearn.feature_selection import SelectKBest, f_classif
-
-
-def custom_auc_pr_score(estimator, X, y):
-
-    #     logging.info(f"[custom_auc_pr_score] estimator: {estimator}")
-
-    #     logging.info(f"[custom_auc_pr_score] type(X): {type(X)}")
-    #     logging.info(f"[custom_auc_pr_score] len(X): {len(X)}")
-    #     logging.info(f"[custom_auc_pr_score] X[0]: {X[0]}")
-
-    #     logging.info(f"[custom_auc_pr_score] type(y): {type(y)}")
-    #     logging.info(f"[custom_auc_pr_score] len(y): {len(y)}")
-    #     logging.info(f"[custom_auc_pr_score] y[0]: {y[0]}")
-
-    # Calculate scores
-    try:
-        y_scores = estimator.score(X)
-    except AttributeError:
-        y_scores = estimator.decision_function(X)
-        logging.info(f"[custom_auc_pr_score] y_scores[:10]: {y_scores[:10]}")
-
-    # ignore unlabeled samples
-    y_scores = np.array([score for idx, score in enumerate(y_scores) if y[idx] != "unlabeled"])
-    logging.info(f"[custom_auc_pr_score] y_scores[:10]: {y_scores[:10]}")
-    label_to_bool_dict = dict(good=1, bad=0)
-    y = np.array([label_to_bool_dict[label] for label in y if label in label_to_bool_dict])
-
-    # Compute the precision-recall curve
-    precision, recall, _ = precision_recall_curve(y, y_scores)
-
-    # Calculate the AUC-PR
-    auc_pr = auc(recall, precision)
-    return auc_pr
-
-
-# Create the pipeline
-pipeline = Pipeline(
-    [
-        (
-            "vect",
-            Doc2VecEstimator(
-                vector_size=100,
-                epochs=10,
-                dm=1,
-                window=5,
-                min_count=1,
-                sample=1e-5,
-                hs=1,
-                negative=0,
-            ),
-        ),
-        #     ('sel', SelectKBest(score_func=f_classif, k=50)),
-        ("clf", OneClassSVM(gamma="scale")),
-    ]
-)
-
-# # Fit the pipeline on your training data
-# print("Fitting pipeline...")
-# pipeline.fit(train_set[:10_000], train_set.labels[:10_000])
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "vect__vector_size": randint(150, 601),  # Random integer between 50 and 400
-    "vect__epochs": randint(5, 21),  # Random integer between 10 and 40
-    "vect__dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
-    "vect__window": randint(4, 13),
-    "clf__kernel": ["linear", "poly", "rbf", "sigmoid"],
-    "clf__degree": randint(2, 6),  # Assuming higher-degree polynomials might be beneficial
-    "clf__gamma": [
-        "scale",
-        "auto",
-        uniform(0.1, 1.0),
-    ],  # Consider both predefined and float gamma values
-    "clf__coef0": uniform(-1, 1),  # Coef0 for 'poly' and 'sigmoid'
-    "clf__tol": uniform(1e-5, 1e-2),  # Varying tolerance values
-    "clf__nu": uniform(0.05, 0.95),  # Considering a range for nu
-    "clf__shrinking": [True, False],  # To explore the effect of shrinking heuristic
+    "vector_size": randint(150, 601),  # Random integer between 50 and 400
+    "epochs": randint(5, 21),  # Random integer between 10 and 40
+    "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
+    "window": randint(4, 13),
+    "kernel": ["linear", "poly", "rbf", "sigmoid"],
+    "degree": randint(2, 6),  # Assuming higher-degree polynomials might be beneficial
+    "gamma": ["scale", "auto"],  # Consider both predefined and float gamma values
+    "coef0": uniform(-1, 1),  # Coef0 for 'poly' and 'sigmoid'
+    "tol": uniform(1e-5, 1e-2),  # Varying tolerance values
+    "nu": uniform(0.05, 0.95),  # Considering a range for nu
+    "shrinking": [True, False],  # To explore the effect of shrinking heuristic
 }
 
 # Update the hyperparameter search to use the pipeline
 halving_random_search = HalvingRandomSearchCV(
-    estimator=pipeline,
+    estimator=Doc2VecOneClassSVMEstimator(),
     param_distributions=param_dist,
     n_candidates="exhaust",
     verbose=1,
     random_state=cp.seed,
     cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=cp.seed),
-    scoring=custom_auc_pr_score,
     min_resources=15000,
 )
 
@@ -1075,6 +1078,16 @@ best_model = halving_random_search.best_estimator_
 
 # Print the best hyperparameters
 print("Best Hyperparameters:", best_params)
+
+# %%
+# Get the AUC-PR score of the best model on the test set
+best_model_vec_score = best_model.vec_score(test_set, test_set.labels)
+print("Best Model Score:", best_model_vec_score)
+
+# %%
+# Get the AUC-PR score of the best model on the test set
+best_model_score = best_model.score(test_set, test_set.labels)
+print("Best Model Score:", best_model_score)
 
 # %% [markdown]
 # # Label test policies according to nearest labeld policy from training coprus - check this out if classification using the available true labels is insufficient

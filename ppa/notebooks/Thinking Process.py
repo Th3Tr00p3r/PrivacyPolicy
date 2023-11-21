@@ -14,11 +14,17 @@
 # ---
 
 # %% [markdown]
-# ### TODO: Fix the logging of Doc2Vec parameters in estimator
+# ### TODO: Try feature selection?
+# ### TODO: Attempt to separate the estimator - the epochs are the issue
+# ### TODO: consider "pseudo-labelling" - predicting labels from model then re-training, testing each iteration.
 # ### TODO: Consider/try/test using vec_model.dv.get_mean_vector("good") instead of calculating the mean in vec_score method
 # ### TODO: try removing PPs of extreme length (according to histogram) - see how it effects score - it definitely affects training time! Compare say cutting at 5000 token vs. 2000 tokens.
 # ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples???
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
+#
+# ### TODO: try these suggestions:
+# * Topic Modeling: Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
+# * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
 
 # %%
 # # %reload_ext autoreload
@@ -28,6 +34,8 @@ from winsound import Beep
 from ppa.utils import config_logging
 from ppa.display import Plotter
 import numpy as np
+from collections import Counter
+import psutil
 
 # Configure logging
 config_logging()
@@ -427,18 +435,14 @@ N = cp.total_samples
 TEST_FRAC = 0.2
 
 train_set, test_set = cp.generate_train_test_sets(
-    #     n_samples=N, test_frac=TEST_FRAC, labeled=False, shuffled_idx=True
     n_samples=N,
     test_frac=TEST_FRAC,
     labeled=True,
     shuffled_idx=True,
 )
 
-# TEST - check percentages in train/test splits
-from collections import Counter
-
-print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in train_set]))
-print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in test_set]))
+print(Counter(train_set.labels))
+print(Counter(test_set.labels))
 
 Beep(1000, 500)
 
@@ -472,7 +476,7 @@ else:
         "hs": 1,
         "negative": 0,
         "epochs": 9,
-        #         "workers": mp.cpu_count(),
+        "workers": psutil.cpu_count(logical=False) - 1,
     }
     semi_supervised_model = Doc2Vec(**semi_supervised_model_kwargs)
 
@@ -632,23 +636,8 @@ display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 from sklearn.metrics.pairwise import cosine_similarity
 
 print("Calculating mean good/bad training-set (model) vectors... ", end="")
-# train
-
-labeled_train_vectors, labeled_train_tags = zip(
-    *[
-        (model.dv[td.tags[0]], (td.tags if len(td.tags) > 1 else td.tags + [label]))
-        for td, label in zip(train_set, train_set.labels)
-        if label != "unlabeled"
-    ]
-)
-
-# train_vectors, train_tags = zip(*[(model.dv[td.tags[0]], td.tags) for td in train_set])
-mean_good_train_vector = np.array(
-    [vec for vec, tags in zip(labeled_train_vectors, labeled_train_tags) if tags[1] == "good"]
-).mean(axis=0)
-mean_bad_train_vector = np.array(
-    [vec for vec, tags in zip(labeled_train_vectors, labeled_train_tags) if tags[1] == "bad"]
-).mean(axis=0)
+mean_good_train_vector = model.dv["good"]
+mean_bad_train_vector = model.dv["bad"]
 print("Done.")
 
 print("Calculating similarites... ", end="")
@@ -680,11 +669,9 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
 # Separate positive and negative instances
-positive_scores = [
-    score for score, label in zip(good_similarity_scores, good_true_labels) if label == 1
-]
+positive_scores = [score for score, label in zip(good_similarity_scores, good_true_labels) if label]
 negative_scores = [
-    score for score, label in zip(good_similarity_scores, good_true_labels) if label == 0
+    score for score, label in zip(good_similarity_scores, good_true_labels) if not label
 ]
 
 with Plotter(
@@ -761,29 +748,19 @@ with Plotter(
 # Let's create reusable train/test sets (stratified)
 
 # %%
-N = 10_000
+N = 40_000
 TEST_FRAC = 0.2
 
 toy_train_set, toy_test_set = cp.generate_train_test_sets(
-    #     n_samples=N,
+    n_samples=N,
     test_frac=TEST_FRAC,
     labeled=True,
     shuffled_idx=True,
-    #     shuffled_gen=True,
 )
 
-# toy_train_set = toy_train_set[:N]
-# toy_test_set = toy_test_set[:N]
-
-# TEST - check percentages in train/test splits
-from collections import Counter
-
-print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in toy_train_set]))
-print(Counter([doc.tags[1] if len(doc.tags) > 1 else "unlabeled" for doc in toy_test_set]))
-
 print("Keeping labels in sets... ", end="")
-toy_train_set.labels
-toy_train_set.labels
+print(Counter(toy_train_set.labels))
+print(Counter(toy_test_set.labels))
 print("Done.")
 
 Beep(1000, 500)
@@ -803,7 +780,7 @@ from sklearn.metrics import (
 )
 from scipy.special import expit
 import psutil
-from typing import List, Set
+from typing import List, Set, Tuple
 import logging
 from gensim.models.doc2vec import TaggedDocument
 
@@ -833,7 +810,7 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
         negative: float = 0.0,
         workers: int = psutil.cpu_count(logical=False) - 1,
         # IsolationForest kwargs
-        n_estimators: int = 100,
+        n_estimators: int = 300,
         contamination: str | float = "auto",
         max_samples: int | str = "auto",
         max_features: int | float = 1.0,
@@ -932,19 +909,19 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
                 #                 self.vec_loss.append(self.vec_model.get_latest_training_loss()) # NOTE: Not implemented, returns 0.0
                 #                 logging.info(f"[Estimator.fit] [epoch {epoch}] vec_loss: {self.vec_loss[epoch]:.2e}") # NOTE: Not implemented in Gensim, returns 0.0
 
-                # transform the documents into (normalized) vectors
+                # transform the documents into vectors
                 logging.info(
-                    f"[Estimator.fit] [epoch {epoch}] Using normalized model vectors as X_train_vec..."
+                    f"[Estimator.fit] [epoch {epoch}] Using model vectors as X_train_vec..."
                 )
-                X_train_vec_norm = self.vec_model.dv.get_normed_vectors()
+                X_train_vec = self.vec_model.dv.vectors
 
                 # Increase the number of trees in IsolationForest according to predetermined list of values
                 self.clf_model.set_params(n_estimators=self.n_estimators_list[epoch])
                 # Train the IsolationForest model using the all samples
                 logging.info(
-                    f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec_norm.shape[0]:,} vector samples..."
+                    f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec.shape[0]:,} vector samples..."
                 )
-                self.clf_model.fit(X_train_vec_norm)
+                self.clf_model.fit(X_train_vec)
 
                 # calculate training score (optional)
                 if self.train_score:
@@ -962,42 +939,43 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
             #             self.vec_loss = [self.vec_model.get_latest_training_loss()]
             #             logging.info(f"[Estimator.fit] vec_loss: {self.vec_loss[0]:.2e}")
 
-            # transform the documents into (normalized) vectors
-            logging.info(f"[Estimator.fit] Using normalized model vectors as X_train_vec...")
-            X_train_vec_norm = self.vec_model.dv.get_normed_vectors()
+            # transform the documents into vectors
+            logging.info(f"[Estimator.fit] Using model vectors as X_train_vec...")
+            X_train_vec = self.vec_model.dv.vectors
 
             # Train the IsolationForest model using the all samples
             logging.info(
-                f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec_norm.shape[0]:,} vector samples..."
+                f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec.shape[0]:,} vector samples..."
             )
-            self.clf_model.fit(X_train_vec_norm)
+            self.clf_model.fit(X_train_vec)
+
+            # calculate training score (optional)
+            if self.train_score:
+                logging.info(f"[Estimator.fit] Training score: {self.score(X, y, verbose=False)}")
 
         return self
 
-    @timer(1000)
-    def predict(self, X=None, X_vec=None):
+    #     @timer(1000)
+    def predict(self, X=None, X_vec=None, **kwargs):
         """Doc."""
 
         # transform X if X_vec not supplied
-        X_vec = X_vec if X_vec is not None else self.vec_transform(X)
+        X_vec = X_vec if X_vec is not None else self.vec_transform(X, **kwargs)
 
         # return classifier prediction
         logging.info(f"[Estimator.predict] Predicting...")
         return self.clf_model.predict(X_vec)
 
-    @timer(1000)
+    #     @timer(1000)
     def score(self, X: List[TaggedDocument], y: List[str], verbose=True):
         """Doc."""
 
-        # convet labeles to an array
-        y_arr = self.labels_to_arr(y)
+        # convet labeles to an array and keep only "good"/"bad" elements, and their indices
+        y_true, labeled_idxs = self.valid_labels(y)
 
-        # consider only labeled samples
-        labeled_idxs = ~np.isnan(y_arr)
         if verbose:
             logging.info(f"[Estimator.score] Filtering labeled samples...")
         X_test = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
-        y_true = y_arr[labeled_idxs]
 
         # transform X, y
         X_test_vec = self.vec_transform(X_test)
@@ -1053,14 +1031,25 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
         elif self.metric == "bal_acc":
             return bal_acc
 
-    def labels_to_arr(self, y):
+    def valid_labels(self, y) -> Tuple[np.array, np.array]:
         """Doc."""
 
         conv_dict = dict(unlabeled=np.nan, good=-1, bad=1)
-        return np.array([conv_dict[label] for label in y])
+        y_arr = np.array([conv_dict[label] for label in y])
+        labeled_idxs = ~np.isnan(y_arr)
+        return y_arr[labeled_idxs], labeled_idxs
 
     def vec_transform(self, X: List[TaggedDocument], normalized=False):
         """Doc."""
+
+        inference_params = {}
+        if self.onlne_learning:
+            inference_params = dict(
+                epochs=self.epochs,
+                alpha=self.alpha_ranges[0][0],  # initial learning rate
+                min_alpha=self.alpha_ranges[-1][-1],  # final learning rate
+            )
+        logging.info(f"[Estimator.vec_transform] inference_params: {inference_params}")
 
         logging.info(
             f"[Estimator.vec_transform] Inferring{' normalized ' if normalized else ' '}vector embeddings..."
@@ -1068,13 +1057,13 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
         if normalized:
             return np.array(
                 [
-                    (vec := self.vec_model.infer_vector(td.words, epochs=self.epochs))
+                    (vec := self.vec_model.infer_vector(td.words, **inference_params))
                     / np.linalg.norm(vec)
                     for td in X
                 ]
             )
         else:
-            return np.array([self.vec_model.infer_vector(td.words, epochs=self.epochs) for td in X])
+            return np.array([self.vec_model.infer_vector(td.words, **inference_params) for td in X])
 
 
 #     def _vec_score(self, X_test_vec, y_test):
@@ -1126,19 +1115,16 @@ class Doc2VecIsolationForestEstimator(BaseEstimator):
 # %%
 estimator = Doc2VecIsolationForestEstimator(
     random_state=cp.seed,
-    onlne_learning=True,
-    epochs=3,
+    onlne_learning=False,
+    epochs=1,
     metric="bal_acc",
-    #     train_score=True,
+    train_score=True,
 )
 estimator.fit(toy_train_set, toy_train_set.labels)
 
 # %%
 score = estimator.score(toy_test_set, toy_test_set.labels)
 print("score: ", score)
-
-# %%
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # ## Hyperparameter Search
@@ -1204,42 +1190,6 @@ print("Best Hyperparameters:", best_params)
 # Get the AUC-PR score of the best model on the test set
 best_model_score = best_model.score(test_set, test_set.labels)
 print("Best Model Score:", best_model_score)
-
-# %%
-# TESTESTEST - trying to get "accuracy"
-from sklearn.metrics import balanced_accuracy_score
-
-# predict outliers for labeled test samples
-y_test = best_model.labels_to_arr(test_set.labels)
-labeled_idxs = ~np.isnan(y_test)
-y_test_labeled = y_test[labeled_idxs]
-X_test_labeled = [test_set[idx] for idx in np.nonzero(labeled_idxs)[0]]
-y_pred_labeled = best_model.predict(X_test_labeled)
-
-# calculate individual accuracies
-good_idxs = y_test_labeled == -1
-bad_idxs = y_test_labeled == 1
-good_accuracy = (
-    sum(y_pred_labeled[good_idxs] == y_test_labeled[good_idxs]) / y_test_labeled[good_idxs].size
-)
-bad_accuracy = (
-    sum(y_pred_labeled[bad_idxs] == y_test_labeled[bad_idxs]) / y_test_labeled[bad_idxs].size
-)
-
-print(f"ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
-print(f"Balanced ACC: {balanced_accuracy_score(y_test_labeled, y_pred_labeled)}")
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %%
-(y_pred_labeled == -1).all()
-
-# %%
-y_pred_labeled.shape
-
-# %%
-y_test_labeled[:50]
 
 # %% [markdown]
 # # Visualize the decision boundary in 2D

@@ -193,7 +193,6 @@ class SampleGenerator:
     start_pos_list: List[int]
     shuffled: bool = False
     index_suffix: InitVar[str] = "_idx"
-    limit: int = None
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
 
     @property
@@ -224,31 +223,16 @@ class SampleGenerator:
         Iterate over samples in the data file.
         """
 
-        if self.limit:
-            # samples on disk
-            if not self.in_memory:
-                for deserialized_obj, _ in zip(
-                    self.indexed_file(shuffled=self.shuffled).read_all(), range(self.limit)
-                ):
-                    yield TaggedDocument(*deserialized_obj)
+        # samples on disk
+        if not self.in_memory:
+            for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
+                yield TaggedDocument(*deserialized_obj)
 
-            # samples in RAM
-            else:
-                if self.shuffled:
-                    self.rng.shuffle(self._sample_list)
-                yield from self._sample_list[: self.limit]
-
+        # samples in RAM
         else:
-            # samples on disk
-            if not self.in_memory:
-                for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
-                    yield TaggedDocument(*deserialized_obj)
-
-            # samples in RAM
-            else:
-                if self.shuffled:
-                    self.rng.shuffle(self._sample_list)
-                yield from self._sample_list
+            if self.shuffled:
+                self.rng.shuffle(self._sample_list)
+            yield from self._sample_list
 
     def __getitem__(self, pos_idx: int | slice) -> TaggedDocument:
         """Doc."""
@@ -266,10 +250,7 @@ class SampleGenerator:
             samples = []
             for pos_idx in pos_idxs:
                 with self.indexed_file(shuffled=False) as idx_input_file:
-                    if (self.limit is None) or (pos_idx < self.limit):
-                        samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
-                    else:
-                        raise IndexError(f"Limited to {self.limit} samples!")
+                    samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
 
             # if more than one sample, return as list
             if len(samples) > 1:
@@ -284,19 +265,13 @@ class SampleGenerator:
     def __len__(self):
         """Doc."""
 
-        if self.limit:
-            if self.start_pos_list:
-                return len(self.start_pos_list)
-            else:
-                return self.limit
-        else:
-            try:
-                return len(self.start_pos_list)
-            except TypeError:
-                len_ = 0
-                for _ in self.indexed_file().read_all():
-                    len_ += 1
-                return len_
+        try:
+            return len(self.start_pos_list)
+        except TypeError:
+            len_ = 0
+            for _ in self.indexed_file().read_all():
+                len_ += 1
+            return len_
 
     def _get_labels(self) -> List[str]:
         """Get labels corresponding to the labels index"""
@@ -499,11 +474,11 @@ class CorpusProcessor:
     def generate_train_test_sets(  # noqa: C901
         self,
         fpath: Path = None,
-        n_samples: int = None,
         test_frac: float = 0.2,
         labeled=False,
         shuffled_idx=False,
         shuffled_gen=False,
+        n_samples: int = None,
     ):
         """
         Generate training and testing sets from the processed data.
@@ -515,7 +490,7 @@ class CorpusProcessor:
         Returns:
             Tuple[SampleGenerator, SampleGenerator]: A tuple of training and testing sample generators.
         """
-        n_samples = n_samples or self.total_samples
+
         if labeled:
             fpath = fpath or self.labeled_corpus_path
         else:
@@ -523,8 +498,7 @@ class CorpusProcessor:
 
         file_idx_path = get_file_index_path(fpath)
 
-        # Calculate the number of training samples
-        n_train = int(n_samples * (1 - test_frac))
+        n_samples = n_samples or self.total_samples
 
         if labeled:
             # Sort the index into a dictionary
@@ -537,49 +511,47 @@ class CorpusProcessor:
                     except json.JSONDecodeError:
                         break
 
-            # Calculate the number of "good," "bad," and "unlabeled" policies in training set (stratified)
-            label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
-            train_frac = 1 - test_frac
-            subset_factor = n_samples / self.total_samples
-            train_factor = train_frac * subset_factor
-            n_train_good = int(label_counts_dict["good"] * train_factor)
-            if not n_train_good:
-                n_train_good = int(label_counts_dict["good"] * train_frac)
-                n_train_bad = int(label_counts_dict["bad"] * train_frac)
-            else:
-                n_train_bad = int(label_counts_dict["bad"] * train_factor)
-            n_train_unlabeled = int(label_counts_dict["unlabeled"] * train_factor)
-
-            # Collect training set file index
-            train_start_positions = []
-            # Collect training set file index
-            for _ in range(n_train_good):
-                train_start_positions.append(index_dict["good"].pop())
-            for _ in range(n_train_bad):
-                train_start_positions.append(index_dict["bad"].pop())
-            for _ in range(n_train_unlabeled):
-                train_start_positions.append(index_dict["unlabeled"].pop())
-
-            # use the rest as test set file index
-            if test_frac:
-                n_test_good = n_samples - n_train_good
-                n_test_bad = n_samples - n_train_bad
-                n_test_unlabeled = n_samples - n_train_unlabeled
-                try:
-                    test_start_positions = (
-                        index_dict["good"][:n_test_good]
-                        + index_dict["bad"][:n_test_bad]
-                        + index_dict["unlabeled"][:n_test_unlabeled]
-                    )
-                except KeyError as exc:
-                    raise RuntimeError(f"Not all types of labels exist! [{exc}]")
-            else:
-                test_start_positions = []
-
             # Shuffle the index (optional) - this means choosing different train/test sets
             if shuffled_idx:
-                self.rng.shuffle(train_start_positions)
-                self.rng.shuffle(test_start_positions)
+                for index_list in index_dict.values():
+                    self.rng.shuffle(index_list)
+
+            # Count the number of "good," "bad," and "unlabeled" policies in training set (stratified)
+            label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+
+            # trim each list according to the requested number of samples and its own length
+            if n_samples < self.total_samples:
+                sample_frac = n_samples / self.total_samples
+                for label in index_dict.keys():
+                    n_reduced = int(label_counts_dict[label] * sample_frac)
+                    index_dict[label] = index_dict[label][:n_reduced]
+
+                # Recount needed after trimming
+                label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+
+            # Collect test set file index (optional)
+            test_start_positions = []
+            if test_frac:
+                n_test_good = int(label_counts_dict["good"] * test_frac)
+                if not n_test_good:
+                    raise RuntimeError("No 'good' samples in the test set - check your data!")
+                n_test_bad = int(label_counts_dict["bad"] * test_frac)
+                n_test_unlabeled = int(label_counts_dict["unlabeled"] * test_frac)
+
+                # Collect training set file index
+                for _ in range(n_test_good):
+                    test_start_positions.append(index_dict["good"].pop())
+                for _ in range(n_test_bad):
+                    test_start_positions.append(index_dict["bad"].pop())
+                for _ in range(n_test_unlabeled):
+                    test_start_positions.append(index_dict["unlabeled"].pop())
+
+            # use the rest as training set file index
+            train_start_positions = index_dict["good"] + index_dict["bad"] + index_dict["unlabeled"]
+
+            # Shuffle again so that labeled samples are mixed in with the unlabeled samples
+            self.rng.shuffle(train_start_positions)
+            self.rng.shuffle(test_start_positions)
 
         # all unlabeled
         else:
@@ -598,6 +570,7 @@ class CorpusProcessor:
                 self.rng.shuffle(index_list)
 
             # create train/test file indices
+            n_train = int(n_samples * (1 - test_frac))
             train_start_positions = index_list[:n_train]
             test_start_positions = index_list[n_train:n_samples]
 
@@ -609,11 +582,13 @@ class CorpusProcessor:
                 label_index_path,
                 train_start_positions,
                 shuffled=shuffled_gen,
-                limit=n_samples,
             )
         else:
             return SampleGenerator(
-                fpath, label_index_path, train_start_positions, shuffled=shuffled_gen
+                fpath,
+                label_index_path,
+                train_start_positions,
+                shuffled=shuffled_gen,
             ), SampleGenerator(fpath, label_index_path, test_start_positions, shuffled=shuffled_gen)
 
     def generate_samples(self, *args, **kwargs):

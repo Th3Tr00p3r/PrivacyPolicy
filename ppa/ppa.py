@@ -308,7 +308,8 @@ class SampleGenerator:
                 _, url, label = json.loads(line.strip())
                 url_label_dict[url] = label
 
-        return [url_label_dict[url] for url in urls]
+        self._labels = [url_label_dict[url] for url in urls]
+        return self._labels
 
     def load_to_memory(self):
         """Doc."""

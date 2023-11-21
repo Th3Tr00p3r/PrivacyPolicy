@@ -14,6 +14,8 @@
 # ---
 
 # %% [markdown]
+# ### TODO: add [n-grams treatment](https://radimrehurek.com/gensim/auto_examples/tutorials/run_lda.html) to data processing - this should replace my made-up hyphenation treatment.
+# ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
 # ### TODO: Try feature selection?
 # ### TODO: Attempt to separate the estimator - the epochs are the issue
 # ### TODO: consider "pseudo-labelling" - predicting labels from model then re-training, testing each iteration.
@@ -32,6 +34,7 @@
 
 from winsound import Beep
 from ppa.utils import config_logging
+import logging
 from ppa.display import Plotter
 import numpy as np
 from collections import Counter
@@ -116,7 +119,7 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # # Processing TODOs:
 # ## TODO: for individual policies - try seeing if the URL appears as is or as consecutive separate words (use word-ninja) in the policy, more than once. if so, convert all appearances to \<COMPANY> tokens.
 # ## TODO: find strange tokens and take care of them. e.g:
-# ### 1) I noticed some tokens containing underscores '_' - these should not exist!
+# ### 1) I noticed some tokens containing underscores '_' - these should not exist! (probably from bad URL regex?)
 # ### 2) I noticed some \<URL> tokens concatenated to some other word/token.
 # ### 3) I noticed \<URL>_\<URL> structures
 # ## Start by establishing a way to search for patterns and get at least the first policy containing them so that their removal could be tested.
@@ -164,7 +167,7 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
 
 # %%
-from ppa.ppa import CorpusProcessor
+from ppa.processing import CorpusProcessor
 
 # SHOULD_REPROCESS = True
 SHOULD_REPROCESS = False
@@ -307,7 +310,7 @@ print(f"{len(tags):,} tags obtained.")
 
 # %%
 import asyncio
-from ppa.ppa import ToSDRDataLoader
+from ppa.processing import ToSDRDataLoader
 import pandas as pd
 
 # get all URLs for which I have PPs
@@ -470,7 +473,6 @@ if not SHOULD_RETRAIN:
 else:
     # Initialize and train the Doc2Vec model
     semi_supervised_model_kwargs = {
-        #         'dm': 1, 'epochs': 9, 'hs': 1, 'vector_size': 443, 'window': 6
         "vector_size": 400,
         "window": 6,
         "hs": 1,
@@ -748,392 +750,69 @@ with Plotter(
 # Let's create reusable train/test sets (stratified)
 
 # %%
-N = 40_000
-TEST_FRAC = 0.2
+N = 30_000
 
-toy_train_set, toy_test_set = cp.generate_train_test_sets(
+toy_train_set = cp.generate_train_test_sets(
     n_samples=N,
-    test_frac=TEST_FRAC,
+    test_frac=0.0,
     labeled=True,
     shuffled_idx=True,
 )
 
 print("Keeping labels in sets... ", end="")
 print(Counter(toy_train_set.labels))
-print(Counter(toy_test_set.labels))
+# print(Counter(toy_test_set.labels))
 print("Done.")
 
 Beep(1000, 500)
 
-# %% [markdown]
-# Define a custom Doc2Vec + IsolationForest estimator which would work with my SampleGenerator class
-
 # %%
-from sklearn.base import BaseEstimator
-from sklearn.ensemble import IsolationForest
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import (
-    balanced_accuracy_score,
-    classification_report,
-    RocCurveDisplay,
-    PrecisionRecallDisplay,
-)
-from scipy.special import expit
-import psutil
-from typing import List, Set, Tuple
-import logging
-from gensim.models.doc2vec import TaggedDocument
-
-from ppa.utils import timer
-
-
-class Doc2VecIsolationForestEstimator(BaseEstimator):
-    """Doc."""
-
-    implemented_metrics: Set[str] = {"auprc", "bal_acc"}
-
-    def __init__(
-        self,
-        # General
-        epochs: int,
-        onlne_learning: bool,
-        metric: str,
-        train_score: bool = False,
-        random_state: int = None,
-        # Doc2Vec kwargs
-        vector_size: int = 300,
-        dm: int = 1,
-        window: int = 5,
-        min_count: int = 0,
-        sample: float = 0.0,
-        hs: int = 1,
-        negative: float = 0.0,
-        workers: int = psutil.cpu_count(logical=False) - 1,
-        # IsolationForest kwargs
-        n_estimators: int = 300,
-        contamination: str | float = "auto",
-        max_samples: int | str = "auto",
-        max_features: int | float = 1.0,
-        bootstrap: bool = False,
-        verbose: int = 0,
-        warm_start: bool = True,
-        n_jobs: int = psutil.cpu_count(logical=False) - 1,
-    ):
-
-        if metric not in self.implemented_metrics:
-            raise ValueError(
-                f"Unknown metric '{self.metric}'. Must be in {self.implemented_metrics}"
-            )
-
-        # Get the local variables as a dictionary
-        arguments = locals()
-        del arguments["self"]  # Remove 'self' from the dictionary
-
-        # Loop through the arguments and set attributes dynamically
-        for key, value in arguments.items():
-            setattr(self, key, value)
-
-    @timer(1000)
-    def fit(self, X, y):
-        """Doc."""
-
-        # Initialize both models
-        self.vec_model = Doc2Vec(
-            vector_size=self.vector_size,
-            dm=self.dm,
-            window=self.window,
-            min_count=self.min_count,
-            sample=self.sample,
-            hs=self.hs,
-            negative=self.negative,
-            seed=self.random_state,
-            workers=self.workers,
-        )
-
-        self.clf_model = IsolationForest(
-            n_estimators=self.n_estimators,
-            contamination=self.contamination,
-            max_samples=self.max_samples,
-            max_features=self.max_features,
-            bootstrap=self.bootstrap,
-            random_state=self.random_state,
-            verbose=self.verbose,
-            warm_start=self.warm_start,
-            n_jobs=self.n_jobs,
-        )
-
-        # Count and display the amount of samples for each label
-        logging.info(f"[Estimator.fit] label_counter: {Counter(y)}")
-
-        # build vocabulary for Doc2Vec
-        self.vec_model.build_vocab(X)
-
-        # Training begins
-        if self.onlne_learning:
-            # get learning rate ranges for each epoch
-            alpha_edges = np.geomspace(
-                self.vec_model.alpha, self.vec_model.min_alpha, self.epochs + 1
-            )
-            self.alpha_ranges = np.array([alpha_edges[:-1], alpha_edges[1:]]).T
-
-            # get increasing number of IsolationForest estimators in logarithmic fashion fo each epoch, e.g. [ 500,  575,  643,  707,  766,  820,  871,  917,  960, 1000]
-            start_val = self.clf_model.n_estimators // 2
-            stop_val = self.clf_model.n_estimators
-            self.n_estimators_list = np.hstack(
-                (
-                    [start_val],
-                    np.cumsum(
-                        np.flip(
-                            np.diff(
-                                np.flip(np.geomspace(stop_val, start_val, self.epochs, dtype=int))
-                            )
-                        )
-                    )
-                    + start_val,
-                )
-            )
-
-            # iterative training
-            #             self.vec_loss = [] # NOTE Not implemented in Gensim
-            for epoch in range(self.epochs):
-                # train a Doc2Vec model on the entire, sparsely labeled dataset
-                # set the alpha decay range according to the pre-defined ranges
-                self.vec_model.alpha, self.vec_model.min_alpha = self.alpha_ranges[epoch]
-                logging.info(
-                    f"[Estimator.fit] [epoch {epoch}] Training {self.vec_model.lifecycle_events[0]['params']}"
-                )
-                #                 logging.info(f"[Estimator.fit] [epoch {epoch}] vec_model.alpha: {self.vec_model.alpha:.2e}, vec_model.alpha: {self.vec_model.min_alpha:.2e}")
-                self.vec_model.train(
-                    X, total_examples=self.vec_model.corpus_count, epochs=1, compute_loss=True
-                )
-                #                 self.vec_loss.append(self.vec_model.get_latest_training_loss()) # NOTE: Not implemented, returns 0.0
-                #                 logging.info(f"[Estimator.fit] [epoch {epoch}] vec_loss: {self.vec_loss[epoch]:.2e}") # NOTE: Not implemented in Gensim, returns 0.0
-
-                # transform the documents into vectors
-                logging.info(
-                    f"[Estimator.fit] [epoch {epoch}] Using model vectors as X_train_vec..."
-                )
-                X_train_vec = self.vec_model.dv.vectors
-
-                # Increase the number of trees in IsolationForest according to predetermined list of values
-                self.clf_model.set_params(n_estimators=self.n_estimators_list[epoch])
-                # Train the IsolationForest model using the all samples
-                logging.info(
-                    f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec.shape[0]:,} vector samples..."
-                )
-                self.clf_model.fit(X_train_vec)
-
-                # calculate training score (optional)
-                if self.train_score:
-                    logging.info(
-                        f"[Estimator.fit] [epoch {epoch}] Training score: {self.score(X, y, verbose=False)}"
-                    )
-
-        # Training vectorizer first, than classifier
-        else:
-            # train a Doc2Vec model on the entire, sparsely labeled dataset
-            logging.info(f"[Estimator.fit] Training {self.vec_model.lifecycle_events[0]['params']}")
-            self.vec_model.train(
-                X, total_examples=self.vec_model.corpus_count, epochs=self.epochs, compute_loss=True
-            )
-            #             self.vec_loss = [self.vec_model.get_latest_training_loss()]
-            #             logging.info(f"[Estimator.fit] vec_loss: {self.vec_loss[0]:.2e}")
-
-            # transform the documents into vectors
-            logging.info(f"[Estimator.fit] Using model vectors as X_train_vec...")
-            X_train_vec = self.vec_model.dv.vectors
-
-            # Train the IsolationForest model using the all samples
-            logging.info(
-                f"[Estimator.fit] Fitting IsolationForest model `{self.clf_model.get_params()}` to {X_train_vec.shape[0]:,} vector samples..."
-            )
-            self.clf_model.fit(X_train_vec)
-
-            # calculate training score (optional)
-            if self.train_score:
-                logging.info(f"[Estimator.fit] Training score: {self.score(X, y, verbose=False)}")
-
-        return self
-
-    #     @timer(1000)
-    def predict(self, X=None, X_vec=None, **kwargs):
-        """Doc."""
-
-        # transform X if X_vec not supplied
-        X_vec = X_vec if X_vec is not None else self.vec_transform(X, **kwargs)
-
-        # return classifier prediction
-        logging.info(f"[Estimator.predict] Predicting...")
-        return self.clf_model.predict(X_vec)
-
-    #     @timer(1000)
-    def score(self, X: List[TaggedDocument], y: List[str], verbose=True):
-        """Doc."""
-
-        # convet labeles to an array and keep only "good"/"bad" elements, and their indices
-        y_true, labeled_idxs = self.valid_labels(y)
-
-        if verbose:
-            logging.info(f"[Estimator.score] Filtering labeled samples...")
-        X_test = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
-
-        # transform X, y
-        X_test_vec = self.vec_transform(X_test)
-
-        #         # Calculate _vec_score
-        #         vec_score = self._vec_score(X_test_vec, y_true)
-        #         if verbose:
-        #             logging.info(f"[Estimator.score] vec_score: {vec_score:.2f}")
-
-        # Calculate scores
-        if verbose:
-            logging.info(f"[Estimator.score] Calculating score...")
-        y_scores = self.clf_model.decision_function(X_test_vec)
-
-        #         # Normalize scores using min-max scaling, using labeled + unlabeled samples
-        #         scaler = MinMaxScaler((-6, 6))
-        #         y_scores_norm = scaler.fit_transform(y_scores.reshape(-1, 1)).flatten()
-        #         logging.info(f"[Estimator.score] y_scores_norm[:10]: {y_scores_norm[:10]}")
-        #         # Transform normalized scores to probabilities using sigmoid function
-        #         y_scores = expit(y_scores_norm)
-
-        # Compute the precision-recall curve
-        precision, recall, _ = precision_recall_curve(y_true, y_scores)
-
-        # Calculate the AUC-PR
-        auc_pr = auc(recall, precision)
-
-        # predict and calculate balanced accuracy
-        y_pred = self.predict(X_vec=X_test_vec)
-        bal_acc = balanced_accuracy_score(y_true, y_pred)
-
-        if verbose:
-            # TESTESTEST
-            RocCurveDisplay.from_predictions(y_true, y_scores, name="ROC-AUC")
-            PrecisionRecallDisplay.from_predictions(y_true, y_scores, name="AUPRC")
-            print(classification_report(y_true, y_pred))
-            # calculate individual accuracies
-            good_idxs = y_true == -1
-            bad_idxs = y_true == 1
-            good_accuracy = sum(y_pred[good_idxs] == y_true[good_idxs]) / y_true[good_idxs].size
-            bad_accuracy = sum(y_pred[bad_idxs] == y_true[bad_idxs]) / y_true[bad_idxs].size
-
-            logging.info(f"[Estimator.score] AUPRC: {auc_pr:.2f}")
-            logging.info(f"[Estimator.score] ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
-            logging.info(f"[Estimator.score] Balanced ACC: {bal_acc}")
-            # /TESTESTEST
-
-        if verbose:
-            logging.info(f"[Estimator.score] Returning '{self.metric}' score.")
-
-        if self.metric == "auprc":
-            return auc_pr
-        elif self.metric == "bal_acc":
-            return bal_acc
-
-    def valid_labels(self, y) -> Tuple[np.array, np.array]:
-        """Doc."""
-
-        conv_dict = dict(unlabeled=np.nan, good=-1, bad=1)
-        y_arr = np.array([conv_dict[label] for label in y])
-        labeled_idxs = ~np.isnan(y_arr)
-        return y_arr[labeled_idxs], labeled_idxs
-
-    def vec_transform(self, X: List[TaggedDocument], normalized=False):
-        """Doc."""
-
-        inference_params = {}
-        if self.onlne_learning:
-            inference_params = dict(
-                epochs=self.epochs,
-                alpha=self.alpha_ranges[0][0],  # initial learning rate
-                min_alpha=self.alpha_ranges[-1][-1],  # final learning rate
-            )
-        logging.info(f"[Estimator.vec_transform] inference_params: {inference_params}")
-
-        logging.info(
-            f"[Estimator.vec_transform] Inferring{' normalized ' if normalized else ' '}vector embeddings..."
-        )
-        if normalized:
-            return np.array(
-                [
-                    (vec := self.vec_model.infer_vector(td.words, **inference_params))
-                    / np.linalg.norm(vec)
-                    for td in X
-                ]
-            )
-        else:
-            return np.array([self.vec_model.infer_vector(td.words, **inference_params) for td in X])
-
-
-#     def _vec_score(self, X_test_vec, y_test):
-#         """Compute the AUC-PR score specifically for the Doc2Vec part of the model"""
-
-#         # Compute mean vectors from the training set
-#         mean_good_train_vector = self.vec_model.dv["good"]
-#         mean_bad_train_vector = self.vec_model.dv["bad"]
-
-#         # Use mean_good_train_vector and mean_bad_train_vector to compute scores
-#         good_sims = cosine_similarity(X_test_vec, mean_good_train_vector.reshape(1, -1))
-#         bad_sims = cosine_similarity(X_test_vec, mean_bad_train_vector.reshape(1, -1))
-#         similarity_diff = good_sims - bad_sims
-#         all_similarities = list(zip(similarity_diff.ravel(), np.nan_to_num(y_test)))
-
-#         # Extract scores for labeled and unlabeled vectors
-#         all_scores = np.array([sim[0] for sim in all_similarities]).reshape(-1, 1)
-#         logging.info(
-#             f"[Estimator.vec_score] raw all scores min/max: {(min(all_scores), max(all_scores))}"
-#         )
-
-#         # Fit MinMaxScaler for normalization using both labeled and unlabeled scores
-#         scaler = MinMaxScaler((-6, 6)).fit(all_scores)
-
-#         # Extract y_true and normalized_labeled_scores for labeled vectors
-#         labeled_logical_idxs = ~np.isnan(y_test)
-#         y_labeled_true = y_test[labeled_logical_idxs]
-#         labeled_scores = all_scores[labeled_logical_idxs.ravel()]
-#         logging.info(
-#             f"[Estimator.vec_score] raw labeled_scores min/max: {(min(labeled_scores), max(labeled_scores))}"
-#         )
-
-#         # Apply normalization to labeled scores
-#         normalized_labeled_scores = scaler.transform(labeled_scores)
-
-#         # Transform normalized scores using sigmoid function
-#         y_labeled_probs = expit(normalized_labeled_scores)
-#         logging.info(f"[Estimator.vec_score] y_labeled_probs[:10]: {y_labeled_probs[:10]}")
-
-#         # Compute AUC-PR using only normalized scores for labeled vectors
-#         precision, recall, _ = precision_recall_curve(y_labeled_true, y_labeled_probs)
-#         auc_pr = auc(recall, precision)
-#         return auc_pr
-
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Trying to fit a fraction of the data for testing
 
 # %%
-estimator = Doc2VecIsolationForestEstimator(
+from sklearn.model_selection import cross_validate
+from ppa.estimators import Doc2VecIsolationForestEstimator, Doc2VecEstimator
+
+estimator = Doc2VecEstimator(
     random_state=cp.seed,
-    onlne_learning=False,
-    epochs=1,
-    metric="bal_acc",
+    window=5,
+    vector_size=500,
+    epochs=5,
     train_score=True,
 )
-estimator.fit(toy_train_set, toy_train_set.labels)
 
-# %%
-score = estimator.score(toy_test_set, toy_test_set.labels)
-print("score: ", score)
+# estimator = Doc2VecIsolationForestEstimator(
+#     random_state=cp.seed,
+#     onlne_learning=False,
+#     window=7,
+#     vector_size=800,
+#     n_estimators=800,
+#     epochs=20,
+#     metric="bal_acc",
+#     train_score=True,
+# )
+
+tic = time.perf_counter()
+logging.info("Starting CV...")
+scores = cross_validate(
+    estimator,
+    toy_train_set,
+    toy_train_set.labels,
+    cv=4,
+    return_train_score=True,
+    verbose=1,
+)
+logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+scores
 
 # %% [markdown]
 # ## Hyperparameter Search
 # Perform search to find best set of hyperparametes
-
-# %%
-# TESTESTEST
-
-# halving_random_search.cv_results_
 
 # %%
 from sklearn.experimental import enable_halving_search_cv  # noqa
@@ -1143,14 +822,14 @@ from scipy.stats import randint, uniform
 # Create a larger parameter grid with more combinations
 param_dist = {
     "vector_size": randint(50, 601),  # Random integer between 150 and 600
-    "epochs": randint(5, 21),  # Random integer between 5 and 20
-    "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
+    "epochs": randint(3, 11),  # Random integer between 5 and 20
+    #     "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
     "window": randint(4, 13),
     "n_estimators": randint(50, 601),  # Random integer between 50 and 250
-    "contamination": ["auto", 0.06],
+    #     "contamination": ["auto", 0.06],
     "max_features": uniform(0.5, 0.5),  # Uniform distribution between 0.5 and 1.0
-    "bootstrap": [True, False],
-    "onlne_learning": [True, False],
+    #     "bootstrap": [True, False],
+    #     "onlne_learning": [True, False],
 }
 
 # Update the hyperparameter search to use the pipeline
@@ -1190,6 +869,11 @@ print("Best Hyperparameters:", best_params)
 # Get the AUC-PR score of the best model on the test set
 best_model_score = best_model.score(test_set, test_set.labels)
 print("Best Model Score:", best_model_score)
+
+# %%
+# TESTESTEST
+
+halving_random_search.cv_results_
 
 # %% [markdown]
 # # Visualize the decision boundary in 2D

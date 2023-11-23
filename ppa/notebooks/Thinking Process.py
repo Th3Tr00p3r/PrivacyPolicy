@@ -16,7 +16,7 @@
 # %% [markdown]
 # ### TODO: add [n-grams treatment](https://radimrehurek.com/gensim/auto_examples/tutorials/run_lda.html) to data processing - this should replace my made-up hyphenation treatment.
 # ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
-# ### TODO: Try feature selection?
+# ### TODO: Try feature selection
 # ### TODO: Attempt to separate the estimator - the epochs are the issue
 # ### TODO: consider "pseudo-labelling" - predicting labels from model then re-training, testing each iteration.
 # ### TODO: Consider/try/test using vec_model.dv.get_mean_vector("good") instead of calculating the mean in vec_score method
@@ -29,9 +29,7 @@
 # * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
 
 # %%
-# # %reload_ext autoreload
-# # %autoreload 2
-
+from IPython.display import display  # type: ignore
 from winsound import Beep
 from ppa.utils import config_logging
 import logging
@@ -127,50 +125,14 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # ### 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
 # #### 1.1) examples for privacy terms - third-party
 
-# %%
-# TEST
-
-# from copy import deepcopy
-
-# # get and check out token document counts (in how many documents each token appears)
-# id_doc_count_dict = dict(sorted({id_: count for id_, count in dct.dfs.items()}.items(), key=lambda x: x[1]))
-# token_doc_count_dict = {dct[id_]: count for id_, count in id_doc_count_dict.items()}
-
-# # consider tokens appearing in N or less documents
-# min_docs = 3
-# rare_doc_count_ids = [id_ for id_, count in id_doc_count_dict.items() if count <= min_docs]
-# rare_doc_count_tokens = [cp.dct[id_] for id_ in rare_doc_count_ids]
-
-# # get and check out collection counts for the rare doc-count tokens
-# comp_names_potential_ids = [id_ for id_ in rare_doc_count_ids if cp.dct.cfs[id_] >= id_doc_count_dict[id_] * 2]
-# comp_names_potential_tokens = [cp.dct[id_] for id_ in comp_names_potential_ids]
-
-# %%
-# print(
-#     f"Dictionary was created by processing {cp.dct.num_pos:,} tokens from a corpus of {cp.dct.num_docs:,} documents."
-# )
-# print(f"It contains {len(cp.dct):,} unique tokens.")
-# print(f"Each document, on average, contains {cp.dct.num_nnz // cp.dct.num_docs:,} unique tokens.")
-
-# %%
-# print(len(comp_names_potential_tokens))
-# comp_names_potential_tokens
-
-# %%
-# print(len(rare_doc_count_tokens))
-# rare_doc_count_tokens
-
-# %%
-# len(rare_doc_count_tokens)
-
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
 
 # %%
 from ppa.processing import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
@@ -184,10 +146,9 @@ cp = CorpusProcessor(
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
 cp.process(
     force=SHOULD_REPROCESS,
-    min_tokens=40,
-    max_tokens=5000,
     lemmatize=True,
     should_filter_stopwords=True,
+    threshold=0.1,
 )
 
 Beep(1000, 500)
@@ -208,9 +169,12 @@ print(sg[IDX].tags, len(sg[IDX].words))
 # Let's take a look at the distribution of PP lengths (number of tokens). It might prove wise to trim the ends of this distribution, as those very short or very long PPs might not represent the general case, and are definitely outliers in the dataset:
 
 # %%
-N = cp.total_samples // 10
+N = 1000
 pp_lengths = np.array(
-    [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=N, shuffled_idx=True)]
+    [
+        len(tagged_doc.words)
+        for tagged_doc in cp.generate_samples(n_samples=N, shuffled_idx=True, shuffled_gen=True)
+    ]
 )
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
@@ -227,11 +191,7 @@ Beep(1000, 500)
 # Now, let's take a look at the `gensim.corpora.Dictionary` we created from the entire corpus:
 
 # %%
-print(
-    f"Dictionary was created by processing {cp.dct.num_pos:,} tokens from a corpus of {cp.dct.num_docs:,} documents."
-)
-print(f"It contains {len(cp.dct):,} unique tokens.")
-print(f"Each document, on average, contains {cp.dct.num_nnz // cp.dct.num_docs:,} unique tokens.")
+cp.dict_info()
 
 # %% [markdown]
 # We can use it to visualize the data a bit.
@@ -277,16 +237,20 @@ display_wordcloud(filtered_dct, per_doc=True)
 # Look for the frequency of specific words (such as "url"):
 
 # %%
-# TODO: change this so that it finds a pattern, not a token
+import re
 
-# The token you want to search for
-target_token = "url"
+# The pattern you want to search for using regular expression
+# target_pattern = r'\b[a-zA-Z]<|>\b[a-zA-Z]\b'
+target_pattern = "URL><"  # twisternederland.com
 
-# Iterate through each document and check if the token is in the document
-for tagged_doc in cp.generate_samples(n_samples=N):
-    if target_token in tagged_doc.words:
-        print(f"{tagged_doc.tags[0]}:\n")
-        print(" ".join(tagged_doc.words))
+# Compile the regular expression pattern
+pattern = re.compile(target_pattern)
+
+# Iterate through each document and check if the pattern matches the document
+for tagged_doc in cp.generate_samples():
+    text = " ".join(tagged_doc.words)
+    if pattern.search(text):
+        print(text)
         break
 
 # %% [markdown]
@@ -300,10 +264,10 @@ from itertools import chain
 # N = 10
 N = np.inf
 
-print(f"Getting URLs/tags... ", end="")
+print(f"Getting URLs... ", end="")
 # tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
 tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
-print(f"{len(tags):,} tags obtained.")
+print(f"{len(tags):,} URLs obtained.")
 
 # %% [markdown]
 # ETL
@@ -379,7 +343,7 @@ ratings_df.sample(10)
 # training_samples
 
 # %% [markdown]
-# It appears that at least for one ID, the privacy policies are different. For now, we will disregard the IDs.
+# It appears that at least for one ID, the privacy policies are different. This makes sense in that IDs (an also scores) are not for privacy policies, but for companies/URLs. For now, we will disregard the IDs.
 
 # %% [markdown]
 # ### 3.2.2 Checking for Bias in Labeled Data
@@ -750,38 +714,40 @@ with Plotter(
 # Let's create reusable train/test sets (stratified)
 
 # %%
-N = 30_000
+N = 100_000
 
-toy_train_set = cp.generate_train_test_sets(
+toy_train_set, toy_test_set = cp.generate_train_test_sets(
     n_samples=N,
-    test_frac=0.0,
+    test_frac=0.3,
     labeled=True,
     shuffled_idx=True,
 )
 
-print("Keeping labels in sets... ", end="")
+# # load toy sets to memory
+# print("Loading samples to RAM... ", end="")
+# toy_train_set.load_to_memory()
+# toy_test_set.load_to_memory()
+# print("Done.")
+
 print(Counter(toy_train_set.labels))
-# print(Counter(toy_test_set.labels))
-print("Done.")
+print(Counter(toy_test_set.labels))
 
 Beep(1000, 500)
-
-# %%
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Trying to fit a fraction of the data for testing
 
 # %%
 from sklearn.model_selection import cross_validate
-from ppa.estimators import Doc2VecIsolationForestEstimator, Doc2VecEstimator
+from ppa.estimators import Doc2VecEstimator  # , Doc2VecIsolationForestEstimator
 
 estimator = Doc2VecEstimator(
     random_state=cp.seed,
-    window=5,
-    vector_size=500,
-    epochs=5,
+    window=25,
+    vector_size=150,
+    epochs=1,
     train_score=True,
+    #     workers=4,
 )
 
 # estimator = Doc2VecIsolationForestEstimator(
@@ -795,85 +761,186 @@ estimator = Doc2VecEstimator(
 #     train_score=True,
 # )
 
-tic = time.perf_counter()
-logging.info("Starting CV...")
-scores = cross_validate(
-    estimator,
-    toy_train_set,
-    toy_train_set.labels,
-    cv=4,
-    return_train_score=True,
-    verbose=1,
-)
-logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# CV = 4
 
-print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
-scores
+# tic = time.perf_counter()
+# logging.info("Starting CV...")
+# scores = cross_validate(
+#     estimator,
+#     toy_train_set,
+#     toy_train_set.labels,
+#     cv=CV,
+#     return_train_score=True,
+#     verbose=1,
+#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+# )
+# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+# scores
+
+tic = time.perf_counter()
+logging.info("Fitting...")
+estimator.fit(toy_train_set, toy_train_set.labels)
+logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
+estimator.score(toy_test_set, toy_test_set.labels)
+
+# %%
+estimator.score(toy_test_set, toy_test_set.labels, threshold=0.496)
+
+# %%
+raise RuntimeError("STOP HERE!")
+
+# %%
+from sklearn.metrics import (
+    PrecisionRecallDisplay,
+    RocCurveDisplay,
+    ConfusionMatrixDisplay,
+    auc,
+    balanced_accuracy_score,
+    classification_report,
+    precision_recall_curve,
+)
+
+
+def score(estimator, X, y, threshold):
+    """Doc."""
+
+    # convet labeles to an array and keep only "good"/"bad" elements, and their indices
+    y_true, labeled_idxs = estimator.valid_labels(y)
+
+    X_labeled = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
+
+    # predict and get scores
+    y_pred, y_scores = estimator.predict(X_labeled, threshold, get_scores=True)
+
+    # Compute balanced accuracy and the precision-recall curve
+    bal_acc = balanced_accuracy_score(y_true, y_pred)
+
+    precision, recall, _ = precision_recall_curve(y_true, y_scores)
+
+    # Calculate the AUC-PR
+    auc_pr = auc(recall, precision)
+
+    # TESTESTEST
+    RocCurveDisplay.from_predictions(y_true, y_scores, name="ROC-AUC")
+    PrecisionRecallDisplay.from_predictions(y_true, y_scores, name="AUPRC")
+    ConfusionMatrixDisplay.from_predictions(y_true, y_pred, normalize="true")
+    print(classification_report(y_true, y_pred))
+    # calculate individual accuracies
+    good_idxs = y_true == -1
+    bad_idxs = y_true == 1
+    good_accuracy = sum(y_pred[good_idxs] == y_true[good_idxs]) / y_true[good_idxs].size
+    bad_accuracy = sum(y_pred[bad_idxs] == y_true[bad_idxs]) / y_true[bad_idxs].size
+
+    logging.info(f"[Estimator.score] AUPRC: {auc_pr:.2f}")
+    logging.info(f"[Estimator.score] ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
+    logging.info(f"[Estimator.score] Balanced ACC: {bal_acc}")
+    # /TESTESTEST
+
+    return bal_acc
+
+
+score(estimator, toy_test_set, toy_test_set.labels, 0.50)
 
 # %% [markdown]
 # ## Hyperparameter Search
 # Perform search to find best set of hyperparametes
 
 # %%
+# BEST PARAMS SO FAR:
+
+# {
+#     'dm': 1,
+#     'epochs': 17,
+#     'hs': 1,
+#     'min_count': 0,
+#     'negative': 0.0,
+#     'prob_threshold': 0.5,
+#     'random_state': 42,
+#     'sample': 0.0,
+#     'train_score': False,
+#     'vector_size': 682,
+#     'window': 8,
+# }
+
+# %%
+raise RuntimeError("STOP HERE")
+
+# %%
 from sklearn.experimental import enable_halving_search_cv  # noqa
 from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold
 from scipy.stats import randint, uniform
+from ppa.estimators import Doc2VecEstimator
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "vector_size": randint(50, 601),  # Random integer between 150 and 600
-    "epochs": randint(3, 11),  # Random integer between 5 and 20
-    #     "dm": [0, 1],  # Distributed Memory (PV-DM) vs. Distributed Bag of Words (PV-DBOW)
-    "window": randint(4, 13),
-    "n_estimators": randint(50, 601),  # Random integer between 50 and 250
-    #     "contamination": ["auto", 0.06],
-    "max_features": uniform(0.5, 0.5),  # Uniform distribution between 0.5 and 1.0
-    #     "bootstrap": [True, False],
-    #     "onlne_learning": [True, False],
+    "epochs": randint(1, 18),
+    "vector_size": [684],
+    "window": [8],
 }
+
+N_SPLITS = 2
+HRS_SEED = randint(0, 2**32).rvs()
 
 # Update the hyperparameter search to use the pipeline
 halving_random_search = HalvingRandomSearchCV(
-    estimator=Doc2VecIsolationForestEstimator(
+    estimator=Doc2VecEstimator(
         random_state=cp.seed,
-        onlne_learning=True,
         epochs=5,
-        #         n_jobs=1,
-        #         workers=1,
-        metric="bal_acc",
     ),
     param_distributions=param_dist,
     n_candidates="exhaust",
     verbose=1,
-    random_state=cp.seed,
-    cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=cp.seed),
+    random_state=HRS_SEED,
+    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
     min_resources=15000,
-    #     n_jobs = psutil.cpu_count(logical=False) - 1,
+    aggressive_elimination=True,
+    n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
 )
+
+# # Update the hyperparameter search to use the pipeline
+# halving_random_search = HalvingRandomSearchCV(
+#     estimator=Doc2VecIsolationForestEstimator(
+#         random_state=cp.seed,
+#         onlne_learning=True,
+#         epochs=5,
+#         #         n_jobs=1,
+#         #         workers=1,
+#         metric="bal_acc",
+#     ),
+#     param_distributions=param_dist,
+#     n_candidates="exhaust",
+#     verbose=1,
+#     random_state=cp.seed,
+#     cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=cp.seed),
+#     min_resources=15000,
+#     #     n_jobs = psutil.cpu_count(logical=False) - 1,
+# )
 
 # Fit the hyperparameter search on your training data
 tic = time.perf_counter()
-print("Starting search...")
+logging.info("Starting search...")
 halving_random_search.fit(train_set, train_set.labels)
-# halving_random_search.fit(train_set, np.zeros((len(train_set.labels),)))
-print(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
-
-# Get the best hyperparameters and model
-best_params = halving_random_search.best_params_
-best_model = halving_random_search.best_estimator_
+logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
 
 # Print the best hyperparameters
-print("Best Hyperparameters:", best_params)
+print("Best Hyperparameters:", halving_random_search.best_params_)
 
-# %%
 # Get the AUC-PR score of the best model on the test set
+best_model = halving_random_search.best_estimator_
 best_model_score = best_model.score(test_set, test_set.labels)
 print("Best Model Score:", best_model_score)
 
-# %%
-# TESTESTEST
+display(pd.DataFrame(halving_random_search.cv_results_))
 
-halving_random_search.cv_results_
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+display(pd.DataFrame(halving_random_search.cv_results_))
+
+# %%
+best_model.get_params()
 
 # %% [markdown]
 # # Visualize the decision boundary in 2D

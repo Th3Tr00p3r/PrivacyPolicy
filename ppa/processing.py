@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import InitVar, dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from winsound import Beep
 
 import aiofiles  # type: ignore
@@ -16,15 +16,11 @@ import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
+from gensim.models.phrases import Phrases
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 from ppa.utils import IndexedFile, get_file_index_path, timer
-
-# TODO: Separate between two cases for URL-like strings - companyname.com should be <COMPANYNAME>, www.companyname.com should be <URL>.
-# Also, can I use the special token method of the Dictionary for them?
-URL_PATTERN = r"(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?\/[a-zA-Z0-9]{2,}|((https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z]{2,}(\.[a-zA-Z]{2,})(\.[a-zA-Z]{2,})?)|(https:\/\/www\.|http:\/\/www\.|https:\/\/|http:\/\/)?[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}\.[a-zA-Z0-9]{2,}(\.[a-zA-Z0-9]{2,})?"
-EMAIL_PATTERN = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
 
 RAW_DATA_FPATH = Path("tosdr_raw.json")
 DATABASE_FPATH = Path("tosdr_db.json")
@@ -194,6 +190,7 @@ class SampleGenerator:
     shuffled: bool = False
     index_suffix: InitVar[str] = "_idx"
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
+    text_only: bool = False
 
     @property
     def labels(self):
@@ -226,7 +223,10 @@ class SampleGenerator:
         # samples on disk
         if not self.in_memory:
             for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
-                yield TaggedDocument(*deserialized_obj)
+                if not self.text_only:
+                    yield TaggedDocument(*deserialized_obj)
+                else:
+                    yield deserialized_obj[0]
 
         # samples in RAM
         else:
@@ -289,6 +289,7 @@ class SampleGenerator:
     def load_to_memory(self):
         """Doc."""
 
+        self._get_labels()
         self._sample_list = list(self)
         self.in_memory = True
 
@@ -337,7 +338,9 @@ class CorpusProcessor:
         return f"CorpusProcessor({self.total_samples:,} docs, seed={self.seed})"
 
     @timer(1000)
-    def process(self, force=False, **kwargs):
+    def process(
+        self, force: bool = False, filter_tokens: bool = True, n_grams: bool = True, **kwargs
+    ):
         """
         Process the corpus and save it to the specified directory.
 
@@ -350,12 +353,11 @@ class CorpusProcessor:
         if not force:
             # Try loading an existing dictionary
             self.dct = Dictionary.load(str(self.dict_path))
-            print("Loaded existing dictionary.")
-            print("Using existing training data.")
+            logging.info("[CorpusProcessor.process] Loaded existing dictionary.")
+            logging.info("[CorpusProcessor.process] Using existing training data.")
         else:
-            print(
-                f"Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk: ",
-                end="",
+            logging.info(
+                f"[CorpusProcessor.process] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
             )
             # Initialize a Dictionary object
             self.dct = Dictionary()
@@ -373,48 +375,115 @@ class CorpusProcessor:
                     td = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
                     # Serialize the document tokens using pickle and write to the compressed file
                     idx_output_file.write(td, notes=td.tags)
-                print("Done.")
+
+            # process n-grams
+            if n_grams:
+                self._unite_bigrams(**kwargs)
 
             # filter tokens
-            print(
-                "Filtering tokens and documents and re-saving TaggedDocument objects to disk... ",
-                end="",
-            )
-            n_docs_filtered, n_tokens_filtered = self._filter_tokens(**kwargs)
-            # removing the filtered documents from the total count
-            self.total_samples -= n_docs_filtered
-            print(
-                f"Filtered {n_docs_filtered:,} documents and {n_tokens_filtered:,} unique tokens."
-            )
+            if filter_tokens:
+                n_docs_filtered = self._filter_tokens(**kwargs)
+                # removing the filtered documents from the total count
+                self.total_samples -= n_docs_filtered
 
-            print("Saving Dictionary... ", end="")
+            logging.info(f"[CorpusProcessor.process] Saving Dictionary to '{self.dict_path}'. ")
             self.dct.save(str(self.dict_path))
-            print("Done.")
+
+    def _unite_bigrams(
+        self,
+        threshold: float = 0.1,
+        min_count: int = None,
+        **kwargs,
+    ) -> None:
+        """Doc."""
+
+        if not min_count:
+            n_total_tokens = self.dct.num_pos
+            n_unique_tokens = len(self.dct)
+            min_count = round(n_total_tokens / n_unique_tokens)
+            logging.info(f"[CorpusProcessor._unite_bigrams] min_count: {min_count}")  # TESTESTEST
+
+        logging.info("[CorpusProcessor._unite_bigrams] Getting bigrams...")
+        bigram = Phrases(
+            self.generate_samples(text_only=True),
+            min_count=min_count,
+            threshold=threshold,
+            scoring="npmi",
+        )
+
+        #         self.sorted_ngrams = dict(sorted(bigram.export_phrases().items(), key=lambda item: item[1]))
+        #         print("ngrams:\n-------", "\n".join(f"{k}: {v}" for k, v in self.sorted_ngrams.items())) # TESTESTEST
+
+        n_unique_tokens_before = len(self.dct)
+
+        # re-initialize the Dictionary
+        self.dct = Dictionary()
+        logging.info("[CorpusProcessor._unite_bigrams] Re-processing...")
+        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+            # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
+            for fidx, td in enumerate(self.generate_samples()):
+                # Track progress visually
+                if not (fidx + 1) % (self.total_samples / 10):
+                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+
+                # Convert the document using the `Phrases` object
+                words_with_bigrams = bigram[td.words]
+
+                # Add to the new dictionary
+                self.dct.add_documents([words_with_bigrams])
+                td = TaggedDocument(words=words_with_bigrams, tags=td.tags)
+                # Serialize the document tokens using JSON and write to file
+                idx_output_file.write(td, notes=td.tags)
+        logging.info(
+            f"[CorpusProcessor._unite_bigrams] Unique token delta: {len(self.dct) - n_unique_tokens_before}"
+        )
 
     def _filter_tokens(
         self,
-        n_below: int = 3,
-        no_above: float = 1.0,
-        min_tokens: int = 10,
-        max_tokens: int = 10_000,
+        n_below: int = None,
+        no_above: float = 0.99,
+        min_percentile: int = 5,
+        max_percentile: int = 95,
         **kwargs,
-    ) -> Tuple[int, int]:
+    ) -> int:
         """Doc."""
 
-        n_tokens_before = len(self.dct)
+        # If not supplied, estimate the min number of docs in which a token must appear as the total/unique tokens ratio
+        if n_below is None:
+            n_total_tokens = self.dct.num_pos
+            n_unique_tokens = len(self.dct)
+            n_below = n_below or round(n_total_tokens / n_unique_tokens)
+
+        # get document lengths by sampling 1000 random document, and get the min/max tokens utilizing percentiles
+        doc_lengths = [
+            len(tagged_doc.words)
+            for tagged_doc in self.generate_samples(
+                n_samples=1000, shuffled_idx=True, shuffled_gen=True
+            )
+        ]
+        min_tokens, max_tokens = np.percentile(
+            doc_lengths, [min_percentile, max_percentile]
+        ).astype(int)
+        logging.info(
+            f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
+        )
+        logging.info(
+            f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
+        )
+
+        n_unique_tokens_before = len(self.dct)
 
         # filter words appearing in less then n_below documents, or more then above 'no_above' fraction of documents
         fltrd_dct = deepcopy(self.dct)
         fltrd_dct.filter_extremes(
             no_below=n_below,
             no_above=no_above,
-            # keep_n=1_000_000,
-            # keep_tokens=None
         )
 
         n_docs_filtered = 0
         # re-initialize the Dictionary
         self.dct = Dictionary()
+        logging.info("[CorpusProcessor._filter_tokens] Re-processing...")
         with IndexedFile(self.corpus_path, "write") as idx_output_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
@@ -424,19 +493,34 @@ class CorpusProcessor:
 
                 # remove tokens not in filtered Dictionary
                 filtered_tokens = [token_ for token_ in td.words if fltrd_dct.token2id.get(token_)]
+                filtered_tokens = self._remove_consecutive_duplicates(filtered_tokens)
                 # Ignore very short/long documents
                 if min_tokens <= len(filtered_tokens) <= max_tokens:
-                    # Add to the dictionary
+                    # Add to the new dictionary
                     self.dct.add_documents([filtered_tokens])
                     td = TaggedDocument(words=filtered_tokens, tags=td.tags)
-
-                    # Serialize the document tokens using pickle and write to file
+                    # Serialize the document tokens using JSON and write to file
                     idx_output_file.write(td, notes=td.tags)
 
                 else:
                     n_docs_filtered += 1
 
-        return n_docs_filtered, n_tokens_before - len(self.dct)
+        logging.info(
+            f"[CorpusProcessor._filter_tokens] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
+        )
+
+        return n_docs_filtered
+
+    def dict_info(self):
+        """Doc."""
+
+        print(
+            f"Dictionary was created by processing {self.dct.num_pos:,} tokens from a corpus of {self.dct.num_docs:,} documents."
+        )
+        print(f"It contains {len(self.dct):,} unique tokens.")
+        print(
+            f"Each document, on average, contains {self.dct.num_nnz // self.dct.num_docs:,} unique tokens."
+        )
 
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
@@ -479,6 +563,7 @@ class CorpusProcessor:
         shuffled_idx=False,
         shuffled_gen=False,
         n_samples: int = None,
+        text_only: bool = False,
     ):
         """
         Generate training and testing sets from the processed data.
@@ -582,6 +667,7 @@ class CorpusProcessor:
                 label_index_path,
                 train_start_positions,
                 shuffled=shuffled_gen,
+                text_only=text_only,
             )
         else:
             return SampleGenerator(
@@ -611,33 +697,42 @@ class CorpusProcessor:
             _, *doc_lines = f.readlines()
             doc = "\n".join(doc_lines)[2:]
 
+        # Replace ordinal numbers (1st, 2nd, 3rd, etc.) with their word equivalents
+        ordinal_pattern = r"\b([1-9]|10)(st|nd|rd|th)\b"
+        doc = re.sub(
+            ordinal_pattern, lambda match: self._convert_ordinal_to_words(match.group(1)), doc
+        )
+
         # Initialize special tokens list
         special_tokens = {}
 
         # Define a regular expression pattern to match common date formats
         date_pattern = r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{1,2},?\s\d{2,4}\b"
-        doc = re.sub(date_pattern, "datetoken", doc)
+        doc = re.sub(date_pattern, "_datetoken_", doc)
         special_tokens["datetoken"] = "<DATE>"
 
         # Find and replace email links with a special token
         email_link_pattern = r"\[([^\]]*?)\]\(mailto:([^\)]*?)\)"
-        doc = re.sub(email_link_pattern, "emladdrstoken", doc)
+        doc = re.sub(email_link_pattern, "_emladdrstoken_", doc)
         special_tokens["emladdrstoken"] = "<EMAIL>"
 
         # Find and replace links with the text inside the square brackets, and add a special token afterwards
         md_link_pattern = r"\[([^\]]*?)\]\(.*?\)"
-        doc = re.sub(md_link_pattern, r"\1 urltoken", doc)
+        doc = re.sub(md_link_pattern, r"\1 _urltoken_", doc)
         special_tokens["urltoken"] = "<URL>"
 
         # Find and replace email addresses
         email_pattern = r"[^@ \t\r\n\v\f]+@[^@ \t\r\n\v\f]+\.[^@ \t\r\n\v\f]+"
-        doc = re.sub(email_pattern, "emladdrstoken", doc)
+        doc = re.sub(email_pattern, "_emladdrstoken_", doc)
 
         # Replace URLs with "<URL>" and email addresses with "<EMAILADD>"
         url_pattern = (
             r"(https?://)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+(\.[a-zA-Z]{2,})?(/[a-zA-Z0-9-]+)*/?"
         )
-        doc = re.sub(url_pattern, "urltoken", doc)
+        doc = re.sub(url_pattern, "_urltoken_", doc)
+
+        # remove underscores (which are caused by Markdown)
+        doc = re.sub("_", " ", doc)
 
         # Tokenize the text
         tokens = self._tokenize_text(doc, special_tokens, **kwargs)
@@ -645,11 +740,30 @@ class CorpusProcessor:
         return tokens
 
     def _tokenize_text(
-        self, text: str, specials_dict: Dict[str, str], filter_stopwords: bool = True, **kwargs
+        self,
+        text: str,
+        specials_dict: Dict[str, str],
+        lemmatize: bool = True,
+        filter_stopwords: bool = True,
+        **kwargs,
     ):
         """Doc."""
 
-        hyphenated_tokens = self._get_hyphenated_tokens(text, **kwargs)
+        # Tokenize the text using simple_preprocess
+        tokens = gensim.utils.simple_preprocess(text, min_len=2, max_len=20)
+
+        # insert special tokens
+        text = " ".join(tokens)
+        for k, v in specials_dict.items():
+            text = re.sub(k, v, text)
+        tokens = text.split()
+
+        # Lemmatize (optional)
+        if lemmatize:
+            # Initialize the WordNet lemmatizer
+            lemmatizer = WordNetLemmatizer()
+            # Lemmatize the tokens
+            tokens = [lemmatizer.lemmatize(token) for token in tokens]
 
         # TODO: Privacy terms / highlighting should be performed here!
         # (before stopwords are removed, which might ruint things such as 'opt out/in')
@@ -659,58 +773,33 @@ class CorpusProcessor:
             keep_list = ["not"]  # , 'but', 'if', 'and', 'or']
             custom_stopwords = ["ii"]
             stop_words = set(stopwords.words("english")) - set(keep_list) | set(custom_stopwords)
-            hyphenated_tokens = [token for token in hyphenated_tokens if token not in stop_words]
+            tokens = [token for token in tokens if token not in stop_words]
 
         # Remove consecutive duplicates
-        tokens = [hyphenated_tokens[0]]
-        for i in range(1, len(hyphenated_tokens)):
-            if hyphenated_tokens[i] != hyphenated_tokens[i - 1]:
-                tokens.append(hyphenated_tokens[i])
-
-        # insert special tokens
-        text = " ".join(tokens)
-        for k, v in specials_dict.items():
-            text = re.sub(k, v, text)
-        tokens = text.split()
+        tokens = self._remove_consecutive_duplicates(tokens)
 
         return tokens
 
-    def _get_hyphenated_tokens(self, text: str, lemmatize: bool = True, **kwargs):
+    def _remove_consecutive_duplicates(self, tokens: List[str]):
         """Doc."""
 
-        def unify_tokens(tokens, unifying_token):
-            result = []
-            i = 0
+        no_dups = [tokens[0]]
+        for i in range(1, len(tokens)):
+            if tokens[i] != tokens[i - 1]:
+                no_dups.append(tokens[i])
+        return no_dups
 
-            while i < len(tokens):
-                if tokens[i] == unifying_token:
-                    i += 1  # Skip the unifying token
-                    continue
-
-                unified_token = tokens[i]
-
-                while i + 2 < len(tokens) and tokens[i + 1] == unifying_token:
-                    # Continue building the unified token
-                    unified_token += "-" + tokens[i + 2]
-                    i += 2  # Skip the next token as it's already unified
-
-                result.append(unified_token)
-                i += 1
-
-            return result
-
-        # Use regular expressions to find hyphenated words and replace hyphens with " hyph "
-        text_with_hyph = re.sub(r"([A-Za-z]+)-([A-Za-z]+)", r"\1 hyph \2", text)
-
-        # Tokenize the text using simple_preprocess
-        tokens = gensim.utils.simple_preprocess(text_with_hyph, min_len=2, max_len=20)
-
-        # Lemmatize (optional)
-        if lemmatize:
-            # Initialize the WordNet lemmatizer
-            lemmatizer = WordNetLemmatizer()
-            # Lemmatize the tokens
-            tokens = [lemmatizer.lemmatize(token) for token in tokens]
-
-        # Merge tokens with "hyph" between them into hyphenated tokens
-        return unify_tokens(tokens, "hyph")
+    def _convert_ordinal_to_words(self, number):
+        ordinals = {
+            "1": "first",
+            "2": "second",
+            "3": "third",
+            "4": "fourth",
+            "5": "fifth",
+            "6": "sixth",
+            "7": "seventh",
+            "8": "eighth",
+            "9": "ninth",
+            "10": "tenth",
+        }
+        return ordinals.get(number, number)

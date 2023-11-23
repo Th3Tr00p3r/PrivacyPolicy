@@ -188,7 +188,7 @@ def display_dim_reduction(arr2d, name: str, **kwargs):
     display_scatter(arr2d, title=f"{name} Visualization", **{**kwargs, **axis_labels_dict})
 
 
-def display_wordcloud(dct: Dictionary, per_doc: bool = False):
+def display_wordcloud(dct: Dictionary | Dict[str, int], per_doc: bool = False):
     """Doc."""
 
     # create a word-count (total or per-document) dictionary from a Gensim Dictionary object

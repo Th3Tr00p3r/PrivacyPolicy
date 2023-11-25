@@ -8,6 +8,7 @@ from sklearn.base import BaseEstimator
 
 # from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
+    ConfusionMatrixDisplay,
     PrecisionRecallDisplay,
     RocCurveDisplay,
     auc,
@@ -144,6 +145,7 @@ class Doc2VecEstimator(BaseEstimator):
             # TESTESTEST
             RocCurveDisplay.from_predictions(y_true, y_scores, name="ROC-AUC")
             PrecisionRecallDisplay.from_predictions(y_true, y_scores, name="AUPRC")
+            ConfusionMatrixDisplay.from_predictions(y_true, y_pred, normalize="true")
             print(classification_report(y_true, y_pred))
             # calculate individual accuracies
             good_idxs = y_true == -1

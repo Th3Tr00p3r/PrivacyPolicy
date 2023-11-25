@@ -14,13 +14,21 @@ import gensim
 import httpx
 import numpy as np
 import pandas as pd
+import wordninja
 from gensim.corpora import Dictionary
 from gensim.models.doc2vec import TaggedDocument
 from gensim.models.phrases import Phrases
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
-from ppa.utils import IndexedFile, get_file_index_path, timer
+from ppa.utils import (
+    IndexedFile,
+    combine_with_separators,
+    concatenate_nearest_neighbors,
+    get_file_index_path,
+    replace_most_common_phrase,
+    timer,
+)
 
 RAW_DATA_FPATH = Path("tosdr_raw.json")
 DATABASE_FPATH = Path("tosdr_db.json")
@@ -339,7 +347,7 @@ class CorpusProcessor:
 
     @timer(1000)
     def process(
-        self, force: bool = False, filter_tokens: bool = True, n_grams: bool = True, **kwargs
+        self, force: bool = False, filter_tokens: bool = True, bigrams: bool = True, **kwargs
     ):
         """
         Process the corpus and save it to the specified directory.
@@ -377,14 +385,12 @@ class CorpusProcessor:
                     idx_output_file.write(td, notes=td.tags)
 
             # process n-grams
-            if n_grams:
+            if bigrams:
                 self._unite_bigrams(**kwargs)
 
-            # filter tokens
+            # filter and remove the filtered documents from the total count
             if filter_tokens:
-                n_docs_filtered = self._filter_tokens(**kwargs)
-                # removing the filtered documents from the total count
-                self.total_samples -= n_docs_filtered
+                self.total_samples -= self._filter_tokens(**kwargs)
 
             logging.info(f"[CorpusProcessor.process] Saving Dictionary to '{self.dict_path}'. ")
             self.dct.save(str(self.dict_path))
@@ -401,17 +407,17 @@ class CorpusProcessor:
             n_total_tokens = self.dct.num_pos
             n_unique_tokens = len(self.dct)
             min_count = round(n_total_tokens / n_unique_tokens)
-            logging.info(f"[CorpusProcessor._unite_bigrams] min_count: {min_count}")  # TESTESTEST
 
-        logging.info("[CorpusProcessor._unite_bigrams] Getting bigrams...")
+        logging.info(f"[CorpusProcessor._unite_bigrams] Getting bigrams (min_count={min_count})...")
         bigram = Phrases(
             self.generate_samples(text_only=True),
             min_count=min_count,
             threshold=threshold,
             scoring="npmi",
+            delimiter="",
         )
 
-        #         self.sorted_ngrams = dict(sorted(bigram.export_phrases().items(), key=lambda item: item[1]))
+        #         self.sorted_ngrams = dict(sorted(bigram.export_phrases().items(), key=lambda item: item[1])) # TESTESTEST
         #         print("ngrams:\n-------", "\n".join(f"{k}: {v}" for k, v in self.sorted_ngrams.items())) # TESTESTEST
 
         n_unique_tokens_before = len(self.dct)
@@ -440,19 +446,13 @@ class CorpusProcessor:
 
     def _filter_tokens(
         self,
-        n_below: int = None,
+        n_below: int = 5,
         no_above: float = 0.99,
         min_percentile: int = 5,
         max_percentile: int = 95,
         **kwargs,
     ) -> int:
         """Doc."""
-
-        # If not supplied, estimate the min number of docs in which a token must appear as the total/unique tokens ratio
-        if n_below is None:
-            n_total_tokens = self.dct.num_pos
-            n_unique_tokens = len(self.dct)
-            n_below = n_below or round(n_total_tokens / n_unique_tokens)
 
         # get document lengths by sampling 1000 random document, and get the min/max tokens utilizing percentiles
         doc_lengths = [
@@ -465,10 +465,10 @@ class CorpusProcessor:
             doc_lengths, [min_percentile, max_percentile]
         ).astype(int)
         logging.info(
-            f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
+            f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
         )
         logging.info(
-            f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
+            f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
         )
 
         n_unique_tokens_before = len(self.dct)
@@ -483,7 +483,7 @@ class CorpusProcessor:
         n_docs_filtered = 0
         # re-initialize the Dictionary
         self.dct = Dictionary()
-        logging.info("[CorpusProcessor._filter_tokens] Re-processing...")
+        logging.info("[CorpusProcessor._filter_tokens] Filtering tokens and document lengths...")
         with IndexedFile(self.corpus_path, "write") as idx_output_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
@@ -492,8 +492,11 @@ class CorpusProcessor:
                     logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                 # remove tokens not in filtered Dictionary
-                filtered_tokens = [token_ for token_ in td.words if fltrd_dct.token2id.get(token_)]
+                filtered_tokens = [
+                    token_ for token_ in td.words if fltrd_dct.token2id.get(token_) is not None
+                ]
                 filtered_tokens = self._remove_consecutive_duplicates(filtered_tokens)
+
                 # Ignore very short/long documents
                 if min_tokens <= len(filtered_tokens) <= max_tokens:
                     # Add to the new dictionary
@@ -504,6 +507,33 @@ class CorpusProcessor:
 
                 else:
                     n_docs_filtered += 1
+
+        # Filter once more, to get rid of leftover '< n_below' tokens after the doc length filtering
+        # filter words appearing in less then n_below documents, or more then above 'no_above' fraction of documents
+        fltrd_dct = deepcopy(self.dct)
+        fltrd_dct.filter_extremes(
+            no_below=n_below,
+            no_above=no_above,
+        )
+        self.dct = Dictionary()
+        logging.info("[CorpusProcessor._filter_tokens] Re-filtering tokens...")
+        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+            # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
+            for fidx, td in enumerate(self.generate_samples()):
+                # Track progress visually
+                if not (fidx + 1) % (self.total_samples / 10):
+                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+
+                # remove tokens not in filtered Dictionary
+                filtered_tokens = [
+                    token_ for token_ in td.words if fltrd_dct.token2id.get(token_) is not None
+                ]
+                filtered_tokens = self._remove_consecutive_duplicates(filtered_tokens)
+                # Add to the new dictionary
+                self.dct.add_documents([filtered_tokens])
+                td = TaggedDocument(words=filtered_tokens, tags=td.tags)
+                # Serialize the document tokens using JSON and write to file
+                idx_output_file.write(td, notes=td.tags)
 
         logging.info(
             f"[CorpusProcessor._filter_tokens] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
@@ -528,12 +558,11 @@ class CorpusProcessor:
 
         if not force:
             # TODO: check also if file exists! if it doesn't, do the labeling even if force=False!
-            print("Using existing labeled data.")
+            logging.info("[CorpusProcessor.add_label_tags] Using existing labeled data.")
 
         else:
-            print(
-                f"Adding labels and saving {self.total_samples:,} TaggedDocument objects to disk: ",
-                end="",
+            logging.info(
+                f"[CorpusProcessor.add_label_tags] Adding labels and saving {self.total_samples:,} TaggedDocument objects to disk...",
             )
             with IndexedFile(self.labeled_corpus_path, "write") as idx_output_file:
                 # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
@@ -690,7 +719,7 @@ class CorpusProcessor:
         # Initialize and return re-generator
         return self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
 
-    def _preprocess_document(self, fpath: Path, **kwargs):
+    def _preprocess_document(self, fpath: Path, separators=["", " ", "-"], **kwargs):
 
         # Read all but the header
         with open(fpath, "r", encoding="utf-8") as f:
@@ -730,6 +759,14 @@ class CorpusProcessor:
             r"(https?://)?[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+(\.[a-zA-Z]{2,})?(/[a-zA-Z0-9-]+)*/?"
         )
         doc = re.sub(url_pattern, "_urltoken_", doc)
+
+        # Look for possible appearances of company name using the fpath/URL
+        possible_company_words = concatenate_nearest_neighbors(
+            wordninja.split(fpath.name.split(".")[0]), 4
+        )
+        possbile_company_names = combine_with_separators(possible_company_words, separators)
+        doc = replace_most_common_phrase(possbile_company_names, doc, "_companynametoken_")
+        special_tokens["companynametoken"] = "<COMPANY>"
 
         # remove underscores (which are caused by Markdown)
         doc = re.sub("_", " ", doc)

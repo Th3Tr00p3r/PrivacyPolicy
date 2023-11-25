@@ -2,10 +2,13 @@ import asyncio
 import functools
 import json
 import logging
+import random
+import re
 import shutil
 import time
 from collections.abc import Iterable
 from dataclasses import InitVar, dataclass, field
+from itertools import product
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Callable, List
@@ -93,6 +96,47 @@ class IndexedFile:
             for pos in self.start_pos_list:
                 file.seek(pos)
                 yield json.loads(file.readline())
+
+
+def replace_most_common_phrase(phrases, text, special_token):
+    # Use a list comprehension to count occurrences of each phrase in the text
+    counts_dict = {phrase: len(re.findall(phrase, text, flags=re.IGNORECASE)) for phrase in phrases}
+    if any(counts_dict.values()):
+
+        # Find the phrase with the maximum count
+        phrase_to_replace, max_count = max(counts_dict.items(), key=lambda item: item[1])
+
+        # Replace and return the most common phrase found in the text with the special token
+        return re.sub(phrase_to_replace, special_token, text, flags=re.IGNORECASE)
+
+    else:
+        return text
+
+
+# Function to find nearest neighbors and concatenate randomly
+def concatenate_nearest_neighbors(strings, n):
+    while len(strings) > n:
+        # Calculate distances (you might use a specific method based on your criteria)
+        # For this example, let's randomly select neighbors to concatenate
+        idx = random.randint(0, len(strings) - 2)
+        concatenated = strings[idx] + strings[idx + 1]
+
+        # Replace the nearest neighbors with the concatenated string
+        strings = strings[:idx] + [concatenated] + strings[idx + 2 :]
+
+    return strings
+
+
+def combine_with_separators(words, separators):
+    # Generate all combinations of separators for the given number of words
+    separator_combinations = product(separators, repeat=len(words) - 1)
+
+    result = []
+    for sep_comb in separator_combinations:
+        combined = [f"{word}{sep}" for word, sep in zip(words, sep_comb)]
+        result.append("".join(combined + [words[-1]]))
+
+    return result
 
 
 def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):

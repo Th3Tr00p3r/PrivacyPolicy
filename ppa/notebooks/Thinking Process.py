@@ -14,13 +14,11 @@
 # ---
 
 # %% [markdown]
-# ### TODO: add [n-grams treatment](https://radimrehurek.com/gensim/auto_examples/tutorials/run_lda.html) to data processing - this should replace my made-up hyphenation treatment.
+# ### TODO: separate files for corpus before bigrams and before filtering? could save time trying different pre-processings
+# ### TODO: unite any "go_daddy", "godaddy" (e.g.) tokens (loose the hyphen)
 # ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
 # ### TODO: Try feature selection
-# ### TODO: Attempt to separate the estimator - the epochs are the issue
-# ### TODO: consider "pseudo-labelling" - predicting labels from model then re-training, testing each iteration.
-# ### TODO: Consider/try/test using vec_model.dv.get_mean_vector("good") instead of calculating the mean in vec_score method
-# ### TODO: try removing PPs of extreme length (according to histogram) - see how it effects score - it definitely affects training time! Compare say cutting at 5000 token vs. 2000 tokens.
+# ### TODO: consider "pseudo-labeling" - predicting labels from model then re-training, testing each iteration.
 # ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples???
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 #
@@ -99,7 +97,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # TESTEST - use only N paths!
-N_PATHS = 100_000_000
+# N_PATHS = 100_000_000
+N_PATHS = 10_000
 print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
 
 # get all privacy policy markdown file paths in a (random) list
@@ -116,14 +115,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %% [markdown]
 # # Processing TODOs:
 # ## TODO: for individual policies - try seeing if the URL appears as is or as consecutive separate words (use word-ninja) in the policy, more than once. if so, convert all appearances to \<COMPANY> tokens.
-# ## TODO: find strange tokens and take care of them. e.g:
-# ### 1) I noticed some tokens containing underscores '_' - these should not exist! (probably from bad URL regex?)
-# ### 2) I noticed some \<URL> tokens concatenated to some other word/token.
-# ### 3) I noticed \<URL>_\<URL> structures
-# ## Start by establishing a way to search for patterns and get at least the first policy containing them so that their removal could be tested.
 # ## TODO: implement a second processing step after Dictionary object is created, which should possibly contain:
 # ### 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
-# #### 1.1) examples for privacy terms - third-party
 
 # %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
@@ -148,7 +141,12 @@ cp.process(
     force=SHOULD_REPROCESS,
     lemmatize=True,
     should_filter_stopwords=True,
-    threshold=0.1,
+    bigrams=False,
+    n_below=5,
+    no_above=1.0,
+    min_percentile=1,
+    max_percentile=99,
+    threshold=0.5,
 )
 
 Beep(1000, 500)
@@ -241,7 +239,7 @@ import re
 
 # The pattern you want to search for using regular expression
 # target_pattern = r'\b[a-zA-Z]<|>\b[a-zA-Z]\b'
-target_pattern = "URL><"  # twisternederland.com
+target_pattern = "><"  # twisternederland.com
 
 # Compile the regular expression pattern
 pattern = re.compile(target_pattern)
@@ -379,8 +377,8 @@ with Plotter() as ax:
 # Finally, let's update the corpus with labeled data, and save it separately:
 
 # %%
-# SHOULD_FORCE_LABELING = True
-SHOULD_FORCE_LABELING = False
+SHOULD_FORCE_LABELING = True
+# SHOULD_FORCE_LABELING = False
 
 url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
 cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
@@ -423,8 +421,8 @@ from gensim.models.doc2vec import Doc2Vec
 # define save/load path
 MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
 
-# SHOULD_RETRAIN = True
-SHOULD_RETRAIN = False
+SHOULD_RETRAIN = True
+# SHOULD_RETRAIN = False
 
 if not SHOULD_RETRAIN:
     # load the last trained model
@@ -437,11 +435,11 @@ if not SHOULD_RETRAIN:
 else:
     # Initialize and train the Doc2Vec model
     semi_supervised_model_kwargs = {
-        "vector_size": 400,
-        "window": 6,
+        "vector_size": 150,
+        "window": 8,
         "hs": 1,
         "negative": 0,
-        "epochs": 9,
+        "epochs": 1,
         "workers": psutil.cpu_count(logical=False) - 1,
     }
     semi_supervised_model = Doc2Vec(**semi_supervised_model_kwargs)
@@ -714,10 +712,10 @@ with Plotter(
 # Let's create reusable train/test sets (stratified)
 
 # %%
-N = 100_000
+# N = 100_000
 
 toy_train_set, toy_test_set = cp.generate_train_test_sets(
-    n_samples=N,
+    #     n_samples=N,
     test_frac=0.3,
     labeled=True,
     shuffled_idx=True,
@@ -788,6 +786,8 @@ estimator.score(toy_test_set, toy_test_set.labels)
 estimator.score(toy_test_set, toy_test_set.labels, threshold=0.496)
 
 # %%
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 raise RuntimeError("STOP HERE!")
 
 # %%
@@ -868,33 +868,33 @@ raise RuntimeError("STOP HERE")
 
 # %%
 from sklearn.experimental import enable_halving_search_cv  # noqa
-from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold
+from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
 from scipy.stats import randint, uniform
 from ppa.estimators import Doc2VecEstimator
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "epochs": randint(1, 18),
-    "vector_size": [684],
-    "window": [8],
+    "epochs": [1, 3],
+    "vector_size": [150, 300],
+    "window": [8, 25],
 }
 
-N_SPLITS = 2
+N_SPLITS = 4
 HRS_SEED = randint(0, 2**32).rvs()
 
 # Update the hyperparameter search to use the pipeline
-halving_random_search = HalvingRandomSearchCV(
+halving_random_search = GridSearchCV(
     estimator=Doc2VecEstimator(
         random_state=cp.seed,
         epochs=5,
     ),
-    param_distributions=param_dist,
-    n_candidates="exhaust",
+    #     param_distributions=param_dist,
+    param_grid=param_dist,
+    #     n_candidates="exhaust",
     verbose=1,
-    random_state=HRS_SEED,
+    #     random_state=HRS_SEED,
     cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
-    min_resources=15000,
-    aggressive_elimination=True,
+    #     min_resources=15000,
     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
 )
 

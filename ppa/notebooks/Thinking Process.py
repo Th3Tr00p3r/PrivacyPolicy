@@ -14,14 +14,13 @@
 # ---
 
 # %% [markdown]
+# ### TODO: Finish work on learning curves - save the train/val scores each epoch, so that they can be plotted after training to check for bias/overfitting
 # ### TODO: separate files for corpus before bigrams and before filtering? could save time trying different pre-processings
-# ### TODO: unite any "go_daddy", "godaddy" (e.g.) tokens (loose the hyphen)
 # ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
 # ### TODO: Try feature selection
 # ### TODO: consider "pseudo-labeling" - predicting labels from model then re-training, testing each iteration.
 # ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples???
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
-#
 # ### TODO: try these suggestions:
 # * Topic Modeling: Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 # * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
@@ -97,8 +96,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # TESTEST - use only N paths!
-# N_PATHS = 100_000_000
-N_PATHS = 10_000
+N_PATHS = 100_000_000
+# N_PATHS = 10_000
 print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
 
 # get all privacy policy markdown file paths in a (random) list
@@ -113,19 +112,13 @@ policy_paths = [fpath for idx, fpath in enumerate(all_policy_paths) if idx < N_P
 print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy files.")
 
 # %% [markdown]
-# # Processing TODOs:
-# ## TODO: for individual policies - try seeing if the URL appears as is or as consecutive separate words (use word-ninja) in the policy, more than once. if so, convert all appearances to \<COMPANY> tokens.
-# ## TODO: implement a second processing step after Dictionary object is created, which should possibly contain:
-# ### 1) try to compose a list of privacy-domain words/n-grams, perhaps by inspecting the dictionary or the corpus itself (for n-grams), and incorporate 'Privacy Term Highlighting' (see ChatGPT conversation) for converting them into special tokens (such as by adding square brackes around these expressions). Consider using the full data using the ToS;DR API for extracting important features existing in general in PPs so that these could be used for feature engineering (selecting best tokens) for all PPs. This could better embed the privacy-oriented properties of PPs (and not themes)
-
-# %% [markdown]
 # Create a fresh CorpusProcessor instance, build a `gensim.corpora import Dictionary` and process the entire corpus, all while streaming to/from disk.
 
 # %%
 from ppa.processing import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
@@ -141,8 +134,8 @@ cp.process(
     force=SHOULD_REPROCESS,
     lemmatize=True,
     should_filter_stopwords=True,
-    bigrams=False,
-    n_below=5,
+    #     bigrams=False,
+    n_below=None,
     no_above=1.0,
     min_percentile=1,
     max_percentile=99,
@@ -154,7 +147,7 @@ Beep(1000, 500)
 # %%
 # TEST
 
-IDX = 3
+IDX = 4
 
 sg = cp.generate_samples()
 print(sg[IDX].tags, len(sg[IDX].words))
@@ -167,11 +160,10 @@ print(sg[IDX].tags, len(sg[IDX].words))
 # Let's take a look at the distribution of PP lengths (number of tokens). It might prove wise to trim the ends of this distribution, as those very short or very long PPs might not represent the general case, and are definitely outliers in the dataset:
 
 # %%
-N = 1000
 pp_lengths = np.array(
     [
         len(tagged_doc.words)
-        for tagged_doc in cp.generate_samples(n_samples=N, shuffled_idx=True, shuffled_gen=True)
+        for tagged_doc in cp.generate_samples(n_samples=5_000, shuffled_idx=True, shuffled_gen=True)
     ]
 )
 
@@ -182,8 +174,6 @@ with Plotter() as ax:
 
 print(f"PP length range: {pp_lengths.min()} - {pp_lengths.max():,} tokens")
 print(f"median PP length: {np.median(pp_lengths):,.0f} tokens")
-
-Beep(1000, 500)
 
 # %% [markdown]
 # Now, let's take a look at the `gensim.corpora.Dictionary` we created from the entire corpus:
@@ -235,21 +225,21 @@ display_wordcloud(filtered_dct, per_doc=True)
 # Look for the frequency of specific words (such as "url"):
 
 # %%
-import re
+# import re
 
-# The pattern you want to search for using regular expression
-# target_pattern = r'\b[a-zA-Z]<|>\b[a-zA-Z]\b'
-target_pattern = "><"  # twisternederland.com
+# # The pattern you want to search for using regular expression
+# # target_pattern = r'\b[a-zA-Z]<|>\b[a-zA-Z]\b'
+# target_pattern = "><"  # twisternederland.com
 
-# Compile the regular expression pattern
-pattern = re.compile(target_pattern)
+# # Compile the regular expression pattern
+# pattern = re.compile(target_pattern)
 
-# Iterate through each document and check if the pattern matches the document
-for tagged_doc in cp.generate_samples():
-    text = " ".join(tagged_doc.words)
-    if pattern.search(text):
-        print(text)
-        break
+# # Iterate through each document and check if the pattern matches the document
+# for tagged_doc in cp.generate_samples():
+#     text = " ".join(tagged_doc.words)
+#     if pattern.search(text):
+#         print(text)
+#         break
 
 # %% [markdown]
 # # 3. Aqcuiring and incorporating labels
@@ -377,8 +367,8 @@ with Plotter() as ax:
 # Finally, let's update the corpus with labeled data, and save it separately:
 
 # %%
-SHOULD_FORCE_LABELING = True
-# SHOULD_FORCE_LABELING = False
+# SHOULD_FORCE_LABELING = True
+SHOULD_FORCE_LABELING = False
 
 url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
 cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
@@ -415,57 +405,30 @@ Beep(1000, 500)
 # Train the Doc2Vec model (semi-supervised):
 
 # %%
+from ppa.estimators import D2VClassifier  # , Doc2VecIsolationForestEstimator
+from ppa.utils import timer
 import time
-from gensim.models.doc2vec import Doc2Vec
 
-# define save/load path
-MODEL_PATH = MODEL_DIR_PATH / "privacy_policy_doc2vec.model"
+classifier = D2VClassifier(
+    random_state=cp.seed,
+    window=8,
+    vector_size=250,
+    epochs=15,
+    train_score=True,
+    iterative_training=True,
+    workers=psutil.cpu_count(logical=False) - 1,
+)
 
-SHOULD_RETRAIN = True
-# SHOULD_RETRAIN = False
+tic = time.perf_counter()
+logging.info("Fitting...")
+classifier.fit(train_set, train_set.labels, X_test=test_set, y_test=test_set.labels)
+logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
+classifier.score(test_set, test_set.labels)
 
-if not SHOULD_RETRAIN:
-    # load the last trained model
-    semi_supervised_model: Doc2Vec = Doc2Vec.load(str(MODEL_PATH))
-
-    # Done
-    print("Semi-supervised model loaded")
-    # TODO: print some model details
-
-else:
-    # Initialize and train the Doc2Vec model
-    semi_supervised_model_kwargs = {
-        "vector_size": 150,
-        "window": 8,
-        "hs": 1,
-        "negative": 0,
-        "epochs": 1,
-        "workers": psutil.cpu_count(logical=False) - 1,
-    }
-    semi_supervised_model = Doc2Vec(**semi_supervised_model_kwargs)
-
-    # Build vocabulary
-    print("Building vocabulary... ", end="")
-    semi_supervised_model.build_vocab(train_set)
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-    # Train the model
-    print(f"Training semi-supervised model... ", end="")
-    tic = time.perf_counter()
-    semi_supervised_model.train(
-        train_set,
-        total_examples=semi_supervised_model.corpus_count,
-        epochs=semi_supervised_model.epochs,
-    )
-
-    # Save the trained model for future use
-    print(f"Saving to '{MODEL_PATH}'... ", end="")
-    semi_supervised_model.save(str(MODEL_PATH))
-    print("Done!")
-
-    # Done!
-    print(f"Training timing: {(time.perf_counter() - tic)/60:.1f} mins")
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# %%
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
@@ -478,70 +441,18 @@ else:
 # As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
-from collections import Counter
-
-if SHOULD_RETRAIN:
-    model = semi_supervised_model
-
-    # Set the number of top similar documents to consider
-    SAMPLE_SIZE = max(N // 100, 100)
-    TOP_N = 10
-
-    ranks = []
-    second_ranks = []
-    for idx, tagged_doc in enumerate(train_set):
-
-        # Estimate percentage using first (random) `SAMPLE_SIZE` documents
-        if idx + 1 == SAMPLE_SIZE:
-            break
-
-        # keep track
-        if not (idx + 1) % (SAMPLE_SIZE // 10):
-            print(f"{(idx+1)/(SAMPLE_SIZE):.0%}... ", end="")
-
-        # Calculate similarities only for the TOP_N similar documents for the current inferred vector
-        inferred_vec = model.infer_vector(tagged_doc.words)
-        sims = model.dv.most_similar([inferred_vec], topn=TOP_N)
-
-        # Find the rank of the tag in the top N
-        try:
-            rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
-        except ValueError:
-            # Handle the case where the tag is not found in sims
-            rank = -1  # Or any other value that indicates "not found"
-        ranks.append(rank)
-
-        second_ranks.append(sims[1])
-    print(" Done.")
-
-    counter = Counter(ranks)
-    print("counter: ", counter)
-
-    # Done
-    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-else:
-    print("Skipping.")
+classifier.sanity_check(train_set, plot=True)
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D
 # We begin by inferring vectors for all labeled samples in the test set
 
 # %%
-# define the model
-model = semi_supervised_model
-
 # Infer document vectors for the test data
-print("Inferring vectors for labeled test policies... ", end="")
-labeled_test_vectors, labeled_test_tags = zip(
-    *[
-        (model.infer_vector(td.words), (td.tags if len(td.tags) > 1 else td.tags + [label]))
-        for td, label in zip(test_set, test_set.labels)
-        if label != "unlabeled"
-    ]
-)
-labeled_test_vectors = np.array(labeled_test_vectors)
-print("Done.")
+# convet labeles to an array and keep only "good"/"bad" elements, and their indices
+labeled_test_tags, labeled_idxs = classifier.valid_labels(test_set.labels)
+test_set_labeled = [test_set[idx] for idx in np.nonzero(labeled_idxs)[0]]
+test_vectors_labeled = classifier.transform(test_set_labeled)
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
@@ -553,11 +464,11 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 from sklearn.decomposition import PCA
 from ppa.display import display_dim_reduction
 
-test_labels = [tags[1] for tags in labeled_test_tags]
+test_labels = ["good" if val == -1 else "bad" for val in labeled_test_tags]
 
 # Perform PCA to reduce dimensionality for visualization
 pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(labeled_test_vectors)
+pca_result = pca.fit_transform(test_vectors_labeled)
 
 # annots = [
 #     tagged_doc.tags[0]
@@ -580,7 +491,7 @@ tsne = TSNE(
     n_iter_without_progress=500,
     random_state=SEED,
 )
-tsne_result = tsne.fit_transform(labeled_test_vectors)
+tsne_result = tsne.fit_transform(test_vectors_labeled)
 
 # annots = [
 #     tagged_doc.tags[0]
@@ -594,49 +505,10 @@ display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
 # ## 5.3 Devising a metric
-# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly.
+# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly. We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies:
 
 # %%
-from sklearn.metrics.pairwise import cosine_similarity
-
-print("Calculating mean good/bad training-set (model) vectors... ", end="")
-mean_good_train_vector = model.dv["good"]
-mean_bad_train_vector = model.dv["bad"]
-print("Done.")
-
-print("Calculating similarites... ", end="")
-good_similarities = {}
-for test_tag, test_policy_vector in zip(labeled_test_tags, labeled_test_vectors):
-    good_sim = cosine_similarity([test_policy_vector], [mean_good_train_vector])[0][0]
-    bad_sim = cosine_similarity([test_policy_vector], [mean_bad_train_vector])[0][0]
-    good_similarities[test_tag[0]] = (
-        (good_sim - bad_sim),
-        test_tag[1],
-    )
-print("Done.")
-
-# Checkout the URLs and scores
-# print(dict(sorted(good_similarities.items(), key=lambda item: item[1][0], reverse=True)))
-
-# Collect predicted scores and true labels for "good" and "bad" policies
-print("Calculating test sample scores... ", end="")
-good_true_labels, good_similarity_scores = zip(
-    *[(true_label == "good", score) for score, true_label in good_similarities.values()]
-)
-print("Done.")
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
-# We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies:
-
-# %%
-# Separate positive and negative instances
-positive_scores = [score for score, label in zip(good_similarity_scores, good_true_labels) if label]
-negative_scores = [
-    score for score, label in zip(good_similarity_scores, good_true_labels) if not label
-]
+y_scores = classifier.decision_function(test_set_labeled)
 
 with Plotter(
     figsize=(10, 6),
@@ -647,16 +519,16 @@ with Plotter(
 
     # Plot the distribution of similarity scores
     ax.hist(
-        positive_scores,
-        bins=int(np.sqrt(len(positive_scores))),
+        positive_scores := y_scores[labeled_test_tags == -1],
+        bins=int(np.sqrt(positive_scores.size)),
         density=True,
         alpha=0.7,
         color="blue",
         label="Positive Instances",
     )
     ax.hist(
-        negative_scores,
-        bins=int(np.sqrt(len(negative_scores))),
+        negative_scores := y_scores[labeled_test_tags == 1],
+        bins=int(np.sqrt(negative_scores.size)),
         density=True,
         alpha=0.7,
         color="orange",
@@ -666,225 +538,32 @@ with Plotter(
     ax.legend()
     ax.grid(True)
 
-# %% [markdown]
-# The significant overlap apparent in the above figure could mean that the model is struggling to separate good from bad policies, especially in the range (-0.15, 0.05)
 
 # %% [markdown]
-# ### 5.3.1 ROC AUC
-
-# %%
-from sklearn.metrics import roc_auc_score, roc_curve
-
-# Display ROC curve and ROC AUC
-fpr, tpr, thresholds = roc_curve(good_true_labels, good_similarity_scores)
-roc_auc = roc_auc_score(good_true_labels, good_similarity_scores)
-with Plotter(
-    suptitle="Receiver Operating Characteristic (ROC) Curve",
-    xlabel="False Positive Rate",
-    ylabel="True Positive Rate",
-) as ax:
-    ax.plot(fpr, tpr, label=f"ROC Curve (AUC = {roc_auc:.2f})")
-    ax.plot([0, 1], [0, 1], "k--", label="Random")
-    ax.legend()
-
+# This shows how good the model is at separating "good" policies from "bad" ones - the less overlap between the two histograms, the less errors it will make when classifying. We will, for now, score the model using balanced accuracy, using the above method to predict "good" policies for those scoring above a threshold (default 0.5).
 
 # %% [markdown]
-# ### 5.3.2 AUC-PR
-
-# %%
-from sklearn.metrics import precision_recall_curve, auc
-
-precision, recall, _ = precision_recall_curve(good_true_labels, good_similarity_scores)
-auc_pr = auc(recall, precision)
-
-with Plotter(
-    xlabel="Recall",
-    ylabel="Precision",
-) as ax:
-    ax.plot(recall, precision, label=f"Precision-Recall Curve (AUC-PR = {auc_pr:.2f})")
-    ax.legend()
-
-# %% [markdown]
-# # 6. Attaching a Classifier
-# It seems that the Doc2Vec model by itself is not doing a good job separating good privacy policies from bad ones. I can try using the vector embeddings as features for a binary classifier. Since I already have an estimator class for Doc2Vec, it should have been relatively easy to create a pipeline and attach more estimators. Unfortunately, since sklearn.pipeline.Pipeline doens't transform y (targets/labels) during fitting, I would have to implement a custom estimator combining Doc2Vec with an unsupervised classifier.
-
-# %% [markdown]
-# Let's create reusable train/test sets (stratified)
-
-# %%
-# N = 100_000
-
-toy_train_set, toy_test_set = cp.generate_train_test_sets(
-    #     n_samples=N,
-    test_frac=0.3,
-    labeled=True,
-    shuffled_idx=True,
-)
-
-# # load toy sets to memory
-# print("Loading samples to RAM... ", end="")
-# toy_train_set.load_to_memory()
-# toy_test_set.load_to_memory()
-# print("Done.")
-
-print(Counter(toy_train_set.labels))
-print(Counter(toy_test_set.labels))
-
-Beep(1000, 500)
-
-# %% [markdown]
-# Trying to fit a fraction of the data for testing
-
-# %%
-from sklearn.model_selection import cross_validate
-from ppa.estimators import Doc2VecEstimator  # , Doc2VecIsolationForestEstimator
-
-estimator = Doc2VecEstimator(
-    random_state=cp.seed,
-    window=25,
-    vector_size=150,
-    epochs=1,
-    train_score=True,
-    #     workers=4,
-)
-
-# estimator = Doc2VecIsolationForestEstimator(
-#     random_state=cp.seed,
-#     onlne_learning=False,
-#     window=7,
-#     vector_size=800,
-#     n_estimators=800,
-#     epochs=20,
-#     metric="bal_acc",
-#     train_score=True,
-# )
-
-# CV = 4
-
-# tic = time.perf_counter()
-# logging.info("Starting CV...")
-# scores = cross_validate(
-#     estimator,
-#     toy_train_set,
-#     toy_train_set.labels,
-#     cv=CV,
-#     return_train_score=True,
-#     verbose=1,
-#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-# )
-# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
-# scores
-
-tic = time.perf_counter()
-logging.info("Fitting...")
-estimator.fit(toy_train_set, toy_train_set.labels)
-logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
-estimator.score(toy_test_set, toy_test_set.labels)
-
-# %%
-estimator.score(toy_test_set, toy_test_set.labels, threshold=0.496)
-
-# %%
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-raise RuntimeError("STOP HERE!")
-
-# %%
-from sklearn.metrics import (
-    PrecisionRecallDisplay,
-    RocCurveDisplay,
-    ConfusionMatrixDisplay,
-    auc,
-    balanced_accuracy_score,
-    classification_report,
-    precision_recall_curve,
-)
-
-
-def score(estimator, X, y, threshold):
-    """Doc."""
-
-    # convet labeles to an array and keep only "good"/"bad" elements, and their indices
-    y_true, labeled_idxs = estimator.valid_labels(y)
-
-    X_labeled = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
-
-    # predict and get scores
-    y_pred, y_scores = estimator.predict(X_labeled, threshold, get_scores=True)
-
-    # Compute balanced accuracy and the precision-recall curve
-    bal_acc = balanced_accuracy_score(y_true, y_pred)
-
-    precision, recall, _ = precision_recall_curve(y_true, y_scores)
-
-    # Calculate the AUC-PR
-    auc_pr = auc(recall, precision)
-
-    # TESTESTEST
-    RocCurveDisplay.from_predictions(y_true, y_scores, name="ROC-AUC")
-    PrecisionRecallDisplay.from_predictions(y_true, y_scores, name="AUPRC")
-    ConfusionMatrixDisplay.from_predictions(y_true, y_pred, normalize="true")
-    print(classification_report(y_true, y_pred))
-    # calculate individual accuracies
-    good_idxs = y_true == -1
-    bad_idxs = y_true == 1
-    good_accuracy = sum(y_pred[good_idxs] == y_true[good_idxs]) / y_true[good_idxs].size
-    bad_accuracy = sum(y_pred[bad_idxs] == y_true[bad_idxs]) / y_true[bad_idxs].size
-
-    logging.info(f"[Estimator.score] AUPRC: {auc_pr:.2f}")
-    logging.info(f"[Estimator.score] ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}")
-    logging.info(f"[Estimator.score] Balanced ACC: {bal_acc}")
-    # /TESTESTEST
-
-    return bal_acc
-
-
-score(estimator, toy_test_set, toy_test_set.labels, 0.50)
-
-# %% [markdown]
-# ## Hyperparameter Search
+# # 6 Hyperparameter Search
 # Perform search to find best set of hyperparametes
-
-# %%
-# BEST PARAMS SO FAR:
-
-# {
-#     'dm': 1,
-#     'epochs': 17,
-#     'hs': 1,
-#     'min_count': 0,
-#     'negative': 0.0,
-#     'prob_threshold': 0.5,
-#     'random_state': 42,
-#     'sample': 0.0,
-#     'train_score': False,
-#     'vector_size': 682,
-#     'window': 8,
-# }
-
-# %%
-raise RuntimeError("STOP HERE")
 
 # %%
 from sklearn.experimental import enable_halving_search_cv  # noqa
 from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
 from scipy.stats import randint, uniform
-from ppa.estimators import Doc2VecEstimator
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "epochs": [1, 3],
+    "epochs": [1, 15],
     "vector_size": [150, 300],
     "window": [8, 25],
 }
 
-N_SPLITS = 4
+N_SPLITS = 3
 HRS_SEED = randint(0, 2**32).rvs()
 
 # Update the hyperparameter search to use the pipeline
-halving_random_search = GridSearchCV(
-    estimator=Doc2VecEstimator(
+search = GridSearchCV(
+    estimator=D2VClassifier(
         random_state=cp.seed,
         epochs=5,
     ),
@@ -896,11 +575,12 @@ halving_random_search = GridSearchCV(
     cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
     #     min_resources=15000,
     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+    refit=False,
 )
 
 # # Update the hyperparameter search to use the pipeline
-# halving_random_search = HalvingRandomSearchCV(
-#     estimator=Doc2VecIsolationForestEstimator(
+# search = HalvingRandomSearchCV(
+#     classifier=Doc2VecIsolationForestEstimator(
 #         random_state=cp.seed,
 #         onlne_learning=True,
 #         epochs=5,
@@ -920,27 +600,94 @@ halving_random_search = GridSearchCV(
 # Fit the hyperparameter search on your training data
 tic = time.perf_counter()
 logging.info("Starting search...")
-halving_random_search.fit(train_set, train_set.labels)
+search.fit(train_set, train_set.labels)
 logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
 
 # Print the best hyperparameters
-print("Best Hyperparameters:", halving_random_search.best_params_)
+logging.info(f"Best Hyperparameters: {search.best_params_}")
 
-# Get the AUC-PR score of the best model on the test set
-best_model = halving_random_search.best_estimator_
-best_model_score = best_model.score(test_set, test_set.labels)
-print("Best Model Score:", best_model_score)
+# display the entire CV results, too
+display(pd.DataFrame(search.cv_results_))
 
-display(pd.DataFrame(halving_random_search.cv_results_))
-
-# Beep when done
+# Beep when search is done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
-# %%
-display(pd.DataFrame(halving_random_search.cv_results_))
+# Refit the model using the best found hyperparameters, with multiprocessing
+best_model = D2VClassifier(
+    **search.best_params_,
+    random_state=cp.seed,
+    workers=psutil.cpu_count(logical=False) - 1,
+)
+best_model.fit(train_set, train_set.labels)
+
+# Get the score of the best model on the test set
+best_model_score = best_model.score(test_set, test_set.labels)
+logging.info("Best Model Score:", best_model_score)
+
+# Beep again when best model is ready
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %% [markdown]
+# Trying to fit a fraction of the data for testing
 
 # %%
-best_model.get_params()
+from sklearn.model_selection import cross_validate
+
+classifier = D2VClassifier(
+    random_state=cp.seed,
+    window=25,
+    vector_size=200,
+    epochs=5,
+    train_score=True,
+    workers=psutil.cpu_count(logical=False) - 1,
+)
+
+# CV = 4
+
+# tic = time.perf_counter()
+# logging.info("Starting CV...")
+# scores = cross_validate(
+#     classifier,
+#     toy_train_set,
+#     toy_train_set.labels,
+#     cv=CV,
+#     return_train_score=True,
+#     verbose=1,
+#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+# )
+# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+# scores
+
+# tic = time.perf_counter()
+# logging.info("Fitting...")
+# classifier.fit(toy_train_set, toy_train_set.labels)
+# logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# classifier.score(toy_test_set, toy_test_set.labels)
+
+# %%
+# classifier.score(toy_test_set, toy_test_set.labels, threshold=0.492)
+
+# %%
+# BEST PARAMS SO FAR:
+
+# {
+#     'dm': 1,
+#     'epochs': 17,
+#     'hs': 1,
+#     'min_count': 0,
+#     'negative': 0.0,
+#     'prob_threshold': 0.5,
+#     'random_state': 42,
+#     'sample': 0.0,
+#     'train_score': False,
+#     'vector_size': 682,
+#     'window': 8,
+# }
+
+# %% [markdown]
+# # 6. Attaching a Classifier
+# It seems that the Doc2Vec model by itself is not doing a good job separating good privacy policies from bad ones. I can try using the vector embeddings as features for a binary classifier. Since I already have an classifier class for Doc2Vec, it should have been relatively easy to create a pipeline and attach more estimators. Unfortunately, since sklearn.pipeline.Pipeline doens't transform y (targets/labels) during fitting, I would have to implement a custom classifier combining Doc2Vec with an unsupervised classifier.
 
 # %% [markdown]
 # # Visualize the decision boundary in 2D

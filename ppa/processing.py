@@ -1,9 +1,10 @@
 import json
 import logging
 import logging.config
+import random
 import re
 from copy import deepcopy
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import Dict, List
@@ -35,160 +36,6 @@ DATABASE_FPATH = Path("tosdr_db.json")
 
 
 @dataclass
-class ToSDRDataLoader:
-    """
-    Load data from the ToSDR API and process it into a DataFrame.
-
-    Args:
-        api_url (str): The URL of the ToSDR API.
-        raw_data_fpath (Path): The path to the raw data file.
-        database_fpath (Path): The path to the database file.
-
-    Methods:
-        load_data(queries: List[str], force_extract=False, force_transform=False, beep=True, **kwargs) -> pd.DataFrame:
-            Load data from the ToSDR API, transform it, and return it as a DataFrame.
-    """
-
-    api_url: str = "https://api.tosdr.org/search/v4/?query="
-    raw_data_fpath: Path = RAW_DATA_FPATH
-    database_fpath: Path = DATABASE_FPATH
-
-    async def load_data(
-        self,
-        queries: List[str],
-        force_extract=False,
-        force_transform=False,
-        beep=True,
-        **kwargs,
-    ) -> pd.DataFrame:
-        """
-        Load data from the ToSDR API, transform it, and return it as a DataFrame.
-
-        Args:
-            queries (List[str]): A list of queries to search in the ToSDR API.
-            force_extract (bool): Force data extraction from the API (default is False).
-            force_transform (bool): Force data transformation (default is False).
-            beep (bool): Enable a beep notification (default is True).
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the processed data.
-        """
-        # Extract fresh raw data
-        if not self.raw_data_fpath.exists() or force_extract:
-            await self._extract_data(queries, **kwargs)
-            # Optionally beep when done (Assuming Windows OS)
-            if beep:
-                Beep(1000, 500)
-
-        # Transform and load afresh
-        if not self.database_fpath.exists() or force_transform:
-            # Transform the raw data into a dictionary object
-            df = self._transform_data()
-            # Save to a JSON file
-            df.to_json(self.database_fpath)
-
-        # Read the JSON file into a Pandas DataFrame
-        return pd.read_json(self.database_fpath)
-
-    def _transform_data(self) -> pd.DataFrame:
-        """
-        Transform raw data into a structured DataFrame.
-
-        Returns:
-            pd.DataFrame: A DataFrame containing the transformed data.
-        """
-        # Read the JSON file into a Pandas DataFrame
-        df = pd.read_json(self.raw_data_fpath, lines=True)
-
-        # Prepare the "parameters" columns for JSON normalization
-        df["parameters"] = df["parameters"].apply(lambda x: x["services"][0])
-
-        # Normalize the JSON inside the "parameters" column
-        parameters_df = pd.json_normalize(df["parameters"], max_level=1)
-
-        # Build a new DataFrame from the relevant data, and rename
-        df = pd.concat([df["message"], parameters_df[["id", "rating.letter"]]], axis=1)
-        df.rename(columns={"message": "tag", "rating.letter": "rating"}, inplace=True)
-
-        # Replace "N/A" strings with NaNs
-        df["rating"].replace("N/A", np.nan, inplace=True)
-
-        # Ignore nulls
-        df = df[df["rating"].notnull()]
-
-        return df
-
-    async def _extract_data(self, queries: List[str], timeout_s=10, **kwargs):
-        """
-        Extract data from the ToSDR API asynchronously and write it to a file.
-
-        Args:
-            queries (List[str]): A list of queries to search in the ToSDR API.
-            timeout_s (int): Timeout duration in seconds (default is 10).
-
-        Returns:
-            None
-        """
-
-        async def write_response(response):
-            """
-            Write a response to the data file.
-
-            Args:
-                response: The response to write to the file.
-
-            Returns:
-                None
-            """
-            async with aiofiles.open(self.raw_data_fpath, "a") as json_file:
-                await json_file.write(f"{json.dumps(response.json())}\n")
-
-        logging.info("Started loading data.")
-
-        # Ensure file exists
-        with open(self.raw_data_fpath, "w"):
-            pass
-
-        # Make requests asynchronously
-        async with httpx.AsyncClient() as client:
-            for query in queries:
-                try:
-                    # Call API (single query)
-                    response = await client.get(f"{self.api_url}{query}", timeout=timeout_s)
-
-                    # If successful call
-                    if response.status_code == 200:
-                        # Check that data exists (not empty)
-                        if not self._is_data_empty(response):
-                            await write_response(response)
-                            logging.info(f"{query}: Success!")
-                        else:
-                            logging.info(f"{query}: Data is empty!")
-                    else:
-                        logging.info(
-                            f"{query}: Failed to fetch data. Status code: {response.status_code}"
-                        )
-
-                except httpx.TimeoutException as exc:
-                    logging.info(f"{query}: Timed-out while fetching data. Error: {exc}")
-                    continue
-
-        logging.info("Finished loading data.")
-
-    def _is_data_empty(self, response) -> bool:
-        """
-        Check if the response data from the API is empty.
-
-        Args:
-            response: The response from the API.
-
-        Returns:
-            bool: True if the response data is empty, False otherwise.
-        """
-        return not bool(response.json()["parameters"]["services"])
-
-
-@dataclass
 class SampleGenerator:
     """Doc."""
 
@@ -196,7 +43,7 @@ class SampleGenerator:
     label_index_path: Path
     start_pos_list: List[int]
     shuffled: bool = False
-    index_suffix: InitVar[str] = "_idx"
+    index_suffix: str = "_idx"
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
     text_only: bool = False
 
@@ -206,7 +53,7 @@ class SampleGenerator:
 
         return self._labels or self._get_labels()
 
-    def __post_init__(self, index_suffix: str):
+    def __post_init__(self):
         """Doc."""
 
         self.indexed_file = partial(
@@ -215,13 +62,26 @@ class SampleGenerator:
             "read",
             self.rng,
             self.start_pos_list,
-            index_suffix,
+            self.index_suffix,
         )
         self.in_memory: bool = False
         self._labels: List[str] = []
 
     def __repr__(self):
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
+
+    def sample(self, n: int):
+        """Doc."""
+
+        return SampleGenerator(
+            self.fpath,
+            self.label_index_path,
+            random.sample(self.start_pos_list, n),
+            self.shuffled,
+            self.index_suffix,
+            self.rng,
+            self.text_only,
+        )
 
     def __iter__(self) -> TaggedDocument:
         """
@@ -446,7 +306,7 @@ class CorpusProcessor:
 
     def _filter_tokens(
         self,
-        n_below: int = 5,
+        n_below: int = None,
         no_above: float = 0.99,
         min_percentile: int = 5,
         max_percentile: int = 95,
@@ -467,6 +327,9 @@ class CorpusProcessor:
         logging.info(
             f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
         )
+
+        # If not supplied, estimate the number of document appearaces below which tokens are ignored to 0.1% of the documents)
+        n_below = n_below or round(self.dct.num_docs / 1000)
         logging.info(
             f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
         )
@@ -840,3 +703,157 @@ class CorpusProcessor:
             "10": "tenth",
         }
         return ordinals.get(number, number)
+
+
+@dataclass
+class ToSDRDataLoader:
+    """
+    Load data from the ToSDR API and process it into a DataFrame.
+
+    Args:
+        api_url (str): The URL of the ToSDR API.
+        raw_data_fpath (Path): The path to the raw data file.
+        database_fpath (Path): The path to the database file.
+
+    Methods:
+        load_data(queries: List[str], force_extract=False, force_transform=False, beep=True, **kwargs) -> pd.DataFrame:
+            Load data from the ToSDR API, transform it, and return it as a DataFrame.
+    """
+
+    api_url: str = "https://api.tosdr.org/search/v4/?query="
+    raw_data_fpath: Path = RAW_DATA_FPATH
+    database_fpath: Path = DATABASE_FPATH
+
+    async def load_data(
+        self,
+        queries: List[str],
+        force_extract=False,
+        force_transform=False,
+        beep=True,
+        **kwargs,
+    ) -> pd.DataFrame:
+        """
+        Load data from the ToSDR API, transform it, and return it as a DataFrame.
+
+        Args:
+            queries (List[str]): A list of queries to search in the ToSDR API.
+            force_extract (bool): Force data extraction from the API (default is False).
+            force_transform (bool): Force data transformation (default is False).
+            beep (bool): Enable a beep notification (default is True).
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the processed data.
+        """
+        # Extract fresh raw data
+        if not self.raw_data_fpath.exists() or force_extract:
+            await self._extract_data(queries, **kwargs)
+            # Optionally beep when done (Assuming Windows OS)
+            if beep:
+                Beep(1000, 500)
+
+        # Transform and load afresh
+        if not self.database_fpath.exists() or force_transform:
+            # Transform the raw data into a dictionary object
+            df = self._transform_data()
+            # Save to a JSON file
+            df.to_json(self.database_fpath)
+
+        # Read the JSON file into a Pandas DataFrame
+        return pd.read_json(self.database_fpath)
+
+    def _transform_data(self) -> pd.DataFrame:
+        """
+        Transform raw data into a structured DataFrame.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the transformed data.
+        """
+        # Read the JSON file into a Pandas DataFrame
+        df = pd.read_json(self.raw_data_fpath, lines=True)
+
+        # Prepare the "parameters" columns for JSON normalization
+        df["parameters"] = df["parameters"].apply(lambda x: x["services"][0])
+
+        # Normalize the JSON inside the "parameters" column
+        parameters_df = pd.json_normalize(df["parameters"], max_level=1)
+
+        # Build a new DataFrame from the relevant data, and rename
+        df = pd.concat([df["message"], parameters_df[["id", "rating.letter"]]], axis=1)
+        df.rename(columns={"message": "tag", "rating.letter": "rating"}, inplace=True)
+
+        # Replace "N/A" strings with NaNs
+        df["rating"].replace("N/A", np.nan, inplace=True)
+
+        # Ignore nulls
+        df = df[df["rating"].notnull()]
+
+        return df
+
+    async def _extract_data(self, queries: List[str], timeout_s=10, **kwargs):
+        """
+        Extract data from the ToSDR API asynchronously and write it to a file.
+
+        Args:
+            queries (List[str]): A list of queries to search in the ToSDR API.
+            timeout_s (int): Timeout duration in seconds (default is 10).
+
+        Returns:
+            None
+        """
+
+        async def write_response(response):
+            """
+            Write a response to the data file.
+
+            Args:
+                response: The response to write to the file.
+
+            Returns:
+                None
+            """
+            async with aiofiles.open(self.raw_data_fpath, "a") as json_file:
+                await json_file.write(f"{json.dumps(response.json())}\n")
+
+        logging.info("Started loading data.")
+
+        # Ensure file exists
+        with open(self.raw_data_fpath, "w"):
+            pass
+
+        # Make requests asynchronously
+        async with httpx.AsyncClient() as client:
+            for query in queries:
+                try:
+                    # Call API (single query)
+                    response = await client.get(f"{self.api_url}{query}", timeout=timeout_s)
+
+                    # If successful call
+                    if response.status_code == 200:
+                        # Check that data exists (not empty)
+                        if not self._is_data_empty(response):
+                            await write_response(response)
+                            logging.info(f"{query}: Success!")
+                        else:
+                            logging.info(f"{query}: Data is empty!")
+                    else:
+                        logging.info(
+                            f"{query}: Failed to fetch data. Status code: {response.status_code}"
+                        )
+
+                except httpx.TimeoutException as exc:
+                    logging.info(f"{query}: Timed-out while fetching data. Error: {exc}")
+                    continue
+
+        logging.info("Finished loading data.")
+
+    def _is_data_empty(self, response) -> bool:
+        """
+        Check if the response data from the API is empty.
+
+        Args:
+            response: The response from the API.
+
+        Returns:
+            bool: True if the response data is empty, False otherwise.
+        """
+        return not bool(response.json()["parameters"]["services"])

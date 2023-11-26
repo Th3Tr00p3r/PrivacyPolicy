@@ -157,19 +157,17 @@ def display_scatter(
 
         if labels is not None:
             unique_labels = list(set(labels))
-            colors = plt.cm.viridis(np.linspace(0, 1, len(unique_labels)))
-            for col_idx, (label, color) in enumerate(zip(unique_labels, colors)):
+            for col_idx, label in enumerate(unique_labels):
                 label_indices = [i for i, l in enumerate(labels) if l == label]
                 ax.scatter(
                     *[dim_slice[label_indices] for dim_slice in dim_slices],
                     6,
-                    color=color,
                     label=label,
                 )
             ax.legend()
 
         else:
-            ax.scatter(*dim_slices, c=labels, cmap="viridis")
+            ax.scatter(*dim_slices, c=labels)
 
         ax.set_title(title)
 

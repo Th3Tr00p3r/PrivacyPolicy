@@ -17,16 +17,20 @@ from sklearn.metrics import (
     precision_recall_curve,
 )
 
+from ppa.display import Plotter
+from ppa.utils import timer
+
 # from ppa.utils import timer
 
 
-class Doc2VecEstimator(BaseEstimator):
+class D2VClassifier(BaseEstimator):
     """Doc."""
 
     def __init__(
         self,
         # General
         epochs: int,
+        iterative_training=False,
         train_score: bool = False,
         random_state: int = None,
         threshold: float = 0.5,
@@ -48,7 +52,7 @@ class Doc2VecEstimator(BaseEstimator):
             setattr(self, key, value)
 
     #     @timer(1000)
-    def fit(self, X, y):
+    def fit(self, X, y, X_test=None, y_test=None):
         """Doc."""
 
         # Initialize both models
@@ -70,19 +74,58 @@ class Doc2VecEstimator(BaseEstimator):
         # Build vocabulary for Doc2Vec
         self.model.build_vocab(X)
 
-        # Train a Doc2Vec model on the entire, sparsely labeled dataset
-        logging.info(f"[Estimator.fit] Training {self.get_params()}")
-        self.model.train(
-            X, total_examples=self.model.corpus_count, epochs=self.epochs, compute_loss=True
-        )
+        # iterative training
+        if self.iterative_training:
 
-        # calculate training score (optional)
-        if self.train_score:
-            logging.info(f"[Estimator.fit] Training score: {self.score(X, y, verbose=False)}")
+            # get learning rate ranges for each epoch, linearly decaying
+            alpha_edges = np.linspace(self.model.alpha, self.model.min_alpha, self.epochs + 1)
+            alpha_ranges = np.array([alpha_edges[:-1], alpha_edges[1:]]).T
+
+            for epoch in range(self.epochs):
+                # train a Doc2Vec model on the entire, sparsely labeled dataset
+                # set the alpha decay range according to the pre-defined ranges
+                self.model.alpha, self.model.min_alpha = alpha_ranges[epoch]
+                logging.info(f"[Estimator.fit] [epoch {epoch}] Training {self.get_params()}")
+                logging.info(
+                    f"[Estimator.fit] [epoch {epoch}] alpha: {self.model.alpha:.2e}, min_alpha: {self.model.min_alpha:.2e}"
+                )
+                self.model.train(X, total_examples=self.model.corpus_count, epochs=1)
+
+                # calculate training score (optional)
+                if self.train_score:
+                    logging.info(
+                        f"[Estimator.fit] [epoch {epoch}] Training score: {self.score(X, y, verbose=False, epochs=epoch+1, alpha=alpha_ranges[0][0], min_alpha=alpha_ranges[epoch][1])}"
+                    )
+                if X_test is not None:
+                    logging.info(
+                        f"[Estimator.fit] [epoch {epoch}] Validation score: {self.score(X_test, y_test, verbose=False, epochs=epoch+1, alpha=alpha_ranges[0][0], min_alpha=alpha_ranges[epoch][1])}"
+                    )
+
+            # return epochs, alpha and min_alpha to total range for inference
+            self.model.alpha, self.model.min_alpha = alpha_ranges[0][0], alpha_ranges[-1][-1]
+            self.model.epochs = self.epochs
+
+        # single call to train with (possibly) multiple epochs
+        else:
+            # Train a Doc2Vec model on the entire, sparsely labeled dataset
+            logging.info(f"[Estimator.fit] Training {self.get_params()}")
+            self.model.train(X, total_examples=self.model.corpus_count, epochs=self.epochs)
+
+            # calculate training score (optional)
+            if self.train_score:
+                logging.info(f"[Estimator.fit] Training score: {self.score(X, y, verbose=False)}")
 
         return self
 
-    def transform(self, X: List[TaggedDocument], normalized=False) -> np.ndarray:
+    def transform(
+        self,
+        X: List[TaggedDocument],
+        normalized=False,
+        epochs=None,
+        alpha=None,
+        min_alpha=None,
+        **kwargs,
+    ) -> np.ndarray:
         """Doc."""
 
         logging.info(
@@ -90,15 +133,30 @@ class Doc2VecEstimator(BaseEstimator):
         )
         if normalized:
             return np.array(
-                [(vec := self.model.infer_vector(td.words)) / np.linalg.norm(vec) for td in X]
+                [
+                    (
+                        vec := self.model.infer_vector(
+                            td.words, epochs=epochs, alpha=alpha, min_alpha=min_alpha
+                        )
+                    )
+                    / np.linalg.norm(vec)
+                    for td in X
+                ]
             )
         else:
-            return np.array([self.model.infer_vector(td.words) for td in X])
+            return np.array(
+                [
+                    self.model.infer_vector(
+                        td.words, epochs=epochs, alpha=alpha, min_alpha=min_alpha
+                    )
+                    for td in X
+                ]
+            )
 
-    def decision_function(self, X) -> np.ndarray:
+    def decision_function(self, X, **kwargs) -> np.ndarray:
         """Doc."""
 
-        X_vec = self.transform(X)
+        X_vec = self.transform(X, **kwargs)
 
         # Use similaities between mean good/bad train vectors and samples to compute scores
         good_sims = self.model.dv.cosine_similarities(self.model.dv["good"], X_vec)
@@ -113,7 +171,7 @@ class Doc2VecEstimator(BaseEstimator):
         """Doc."""
 
         threshold = threshold if threshold is not None else self.threshold
-        scores = self.decision_function(X)
+        scores = self.decision_function(X, **kwargs)
         y_pred = np.where(scores > threshold, -1, 1)
         if get_scores:
             return y_pred, scores
@@ -167,6 +225,44 @@ class Doc2VecEstimator(BaseEstimator):
         y_arr = np.array([conv_dict[label] for label in y])
         labeled_idxs = ~np.isnan(y_arr)
         return y_arr[labeled_idxs], labeled_idxs
+
+    @timer(1000)
+    def sanity_check(self, X_train, n_samples=1_000, plot=False):
+        """Doc."""
+
+        max_rank = 10
+        ranks = []
+        for idx, tagged_doc in enumerate(X_train.sample(n_samples)):
+
+            # keep track
+            if not (idx + 1) % (n_samples // 10):
+                logging.info(f"{(idx+1)/(n_samples):.0%}... ")
+
+            # Calculate similarities only for the TOP_N similar documents for the current inferred vector
+            inferred_vec = self.model.infer_vector(tagged_doc.words)
+            sims = self.model.dv.most_similar([inferred_vec], topn=max_rank)
+
+            # Find the rank of the tag in the top N
+            try:
+                rank = [docid for docid, sim in sims].index(tagged_doc.tags[0])
+            except ValueError:
+                # Handle the case where the tag is not found in sims (worse than 10th most similar)
+                rank = max_rank + 1
+            ranks.append(rank)
+
+        # count the similarity rank
+        sorted_rank_counts = dict(sorted(Counter(ranks).items()))
+        sorted_rank_counts[f">{max_rank-1}"] = sorted_rank_counts.pop(max_rank + 1)
+
+        if plot:
+            with Plotter(
+                suptitle="Sanity Check",
+                xlabel="Similarity Rank",
+                ylabel="Num. Documents",
+            ) as ax:
+                ax.bar([str(k) for k in sorted_rank_counts.keys()], sorted_rank_counts.values())
+
+        return sorted_rank_counts
 
 
 # class Doc2VecIsolationForestEstimator(BaseEstimator):

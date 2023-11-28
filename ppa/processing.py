@@ -36,7 +36,26 @@ DATABASE_FPATH = Path("tosdr_db.json")
 
 @dataclass
 class SampleGenerator:
-    """Doc."""
+    """
+    Generates samples from a data file based on provided parameters.
+
+    Parameters
+    ----------
+    fpath : Path
+        Path to the data file.
+    label_index_path : Path
+        Path to the label index file.
+    start_pos_list : List[int]
+        List of starting positions in the file for sampling.
+    shuffled : bool, optional
+        Flag to shuffle the start positions, by default False.
+    index_suffix : str, optional
+        Suffix for the index, by default "_idx".
+    rng : np.random.Generator, optional
+        Random number generator, by default np.random.default_rng().
+    text_only : bool, optional
+        Flag to indicate sampling text only, by default False.
+    """
 
     fpath: Path
     label_index_path: Path
@@ -47,13 +66,22 @@ class SampleGenerator:
     text_only: bool = False
 
     @property
-    def labels(self):
-        """Doc."""
+    def labels(self) -> List[str]:
+        """
+        Retrieve labels corresponding to the samples.
+
+        Returns
+        -------
+        List[str]
+            List of labels.
+        """
 
         return self._labels or self._get_labels()
 
     def __post_init__(self):
-        """Doc."""
+        """
+        Initialize SampleGenerator.
+        """
 
         self.indexed_file = partial(
             IndexedFile,
@@ -65,12 +93,34 @@ class SampleGenerator:
         )
         self._labels: List[str] = []
 
-    def __repr__(self):
+    def __repr__(self) -> str:
+        """
+        Return a string representation of SampleGenerator.
+
+        Returns
+        -------
+        str
+            String representation.
+        """
+
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
 
-    def sample(self, n: int = None, idxs: List[int] | np.ndarray = None):
-        """Doc."""
-        # TODO: enable using logical indexing with a Numpy True/False array as well as actual indices.
+    def sample(self, n: int = None, idxs: List[int] | np.ndarray = None) -> "SampleGenerator":
+        """
+        Generate a new SampleGenerator instance with sampled data.
+
+        Parameters
+        ----------
+        n : int, optional
+            Number of samples to retrieve, by default None.
+        idxs : List[int] | np.ndarray, optional
+            List of indices to sample, by default None.
+
+        Returns
+        -------
+        SampleGenerator
+            Sampled instance of SampleGenerator.
+        """
 
         start_pos_list = copy(self.start_pos_list)
         if idxs is not None:
@@ -89,9 +139,14 @@ class SampleGenerator:
             self.text_only,
         )
 
-    def __iter__(self) -> TaggedDocument:
+    def __iter__(self) -> "TaggedDocument":
         """
         Iterate over samples in the data file.
+
+        Yields
+        ------
+        TaggedDocument
+            Yielded samples.
         """
 
         for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
@@ -100,8 +155,20 @@ class SampleGenerator:
             else:
                 yield deserialized_obj[0]
 
-    def __getitem__(self, pos_idx: int | slice | str) -> TaggedDocument:
-        """Doc."""
+    def __getitem__(self, pos_idx: int | slice | str) -> "TaggedDocument" | List["TaggedDocument"]:
+        """
+        Retrieve samples by position index or slice.
+
+        Parameters
+        ----------
+        pos_idx : int | slice | str
+            Index or slice to retrieve samples.
+
+        Returns
+        -------
+        TaggedDocument | List[TaggedDocument]
+            Retrieved sample(s).
+        """
 
         # handle slice objects
         if isinstance(pos_idx, slice):
@@ -125,8 +192,15 @@ class SampleGenerator:
         else:
             return samples[0]
 
-    def __len__(self):
-        """Doc."""
+    def __len__(self) -> int:
+        """
+        Return the number of samples in SampleGenerator.
+
+        Returns
+        -------
+        int
+            Number of samples.
+        """
 
         try:
             return len(self.start_pos_list)
@@ -137,7 +211,14 @@ class SampleGenerator:
             return len_
 
     def _get_labels(self) -> List[str]:
-        """Get labels corresponding to the labels index"""
+        """
+        Retrieve labels corresponding to the labels index.
+
+        Returns
+        -------
+        List[str]
+            List of labels.
+        """
 
         urls = [td.tags[0] for td in self]
         url_label_dict = {}
@@ -153,25 +234,7 @@ class SampleGenerator:
 @dataclass
 class CorpusProcessor:
     """
-    Process a corpus of documents into a format suitable for training a model.
-
-    Args:
-        fpaths (List[Path]): A list of file paths to the documents.
-        save_dir_path (Path): The path to the directory for saving processed data.
-        url_pattern (str): A regular expression pattern for matching URLs (default is URL_PATTERN).
-        email_pattern (str): A regular expression pattern for matching email addresses (default is EMAIL_PATTERN).
-        max_tokens (int): The maximum number of tokens in a document (default is 100,000).
-        min_tokens (int): The minimum number of tokens in a document (default is 0).
-        seed (int): Seed for reproducible shuffling (default is None).
-        dct (Dictionary): The Gensim Dictionary for document ID conversion (default is None).
-
-    Methods:
-        process(force=False, **kwargs):
-            Process the corpus and save it to the specified directory.
-        generate_train_test_sets(n_samples=None, test_frac=0.2):
-            Generate training and testing sets from the processed data.
-        generate_samples(n_samples=None):
-            Generate document samples from the processed data.
+    Process and manipulate a corpus of text documents.
     """
 
     fpaths: List[Path]
@@ -180,6 +243,10 @@ class CorpusProcessor:
     dct: Dictionary = None
 
     def __post_init__(self) -> None:
+        """
+        Initialize the CorpusProcessor after the object creation.
+        """
+
         self.total_samples: int = len(self.fpaths)
 
         # file paths:
@@ -191,6 +258,10 @@ class CorpusProcessor:
         self.rng = np.random.default_rng(self.seed)
 
     def __repr__(self):
+        """
+        Return a string representation of the CorpusProcessor object.
+        """
+
         return f"CorpusProcessor({self.total_samples:,} docs, seed={self.seed})"
 
     @timer(1000)
@@ -198,14 +269,18 @@ class CorpusProcessor:
         self, force: bool = False, filter_tokens: bool = True, bigrams: bool = True, **kwargs
     ):
         """
-        Process the corpus and save it to the specified directory.
+        Process the corpus for dictionary creation and tokenization.
 
-        Args:
-            force (bool): Force reprocessing (default is False).
-
-        Returns:
-            None
+        Parameters
+        ----------
+        force : bool, optional
+            Force reprocessing of the corpus, by default False.
+        filter_tokens : bool, optional
+            Toggle token filtering, by default True.
+        bigrams : bool, optional
+            Toggle bigram creation, by default True.
         """
+
         if not force:
             # Try loading an existing dictionary
             self.dct = Dictionary.load(str(self.dict_path))
@@ -249,7 +324,16 @@ class CorpusProcessor:
         min_count: int = None,
         **kwargs,
     ) -> None:
-        """Doc."""
+        """
+        Generate and unite bigrams in the corpus.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Threshold for bigram detection, by default 0.1.
+        min_count : int, optional
+            Minimum count for bigram creation, by default None.
+        """
 
         if not min_count:
             n_total_tokens = self.dct.num_pos
@@ -300,7 +384,25 @@ class CorpusProcessor:
         max_percentile: int = 99,
         **kwargs,
     ) -> int:
-        """Doc."""
+        """
+        Filter tokens based on document statistics.
+
+        Parameters
+        ----------
+        n_below : int, optional
+            Tokens appearing below this number are filtered, by default None.
+        no_above : float, optional
+            Fraction of documents for token filtering, by default 0.99.
+        min_percentile : int, optional
+            Minimum percentile for token filtering, by default 1.
+        max_percentile : int, optional
+            Maximum percentile for token filtering, by default 99.
+
+        Returns
+        -------
+        int
+            Number of documents filtered.
+        """
 
         # get document lengths by sampling 1000 random document, and get the min/max tokens utilizing percentiles
         doc_lengths = [
@@ -392,8 +494,10 @@ class CorpusProcessor:
 
         return n_docs_filtered
 
-    def dict_info(self):
-        """Doc."""
+    def dict_info(self) -> None:
+        """
+        Display information about the dictionary.
+        """
 
         print(
             f"Dictionary was created by processing {self.dct.num_pos:,} tokens from a corpus of {self.dct.num_docs:,} documents."
@@ -405,7 +509,16 @@ class CorpusProcessor:
 
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
-        """Doc."""
+        """
+        Add label tags to the corpus.
+
+        Parameters
+        ----------
+        tag_label_dict : Dict[str, str]
+            Dictionary mapping tags to labels.
+        force : bool, optional
+            Force labeling, by default False.
+        """
         # TODO: this does not make sense! Why do I need a whole copy of the corpus with just the labels added? all I need is the index file. really
 
         if not force:
@@ -447,14 +560,29 @@ class CorpusProcessor:
         text_only: bool = False,
     ):
         """
-        Generate training and testing sets from the processed data.
+        Generate training and testing sets from the corpus.
 
-        Args:
-            n_samples (int): The number of samples to generate (default is None).
-            test_frac (float): The fraction of samples to use for testing (default is 0.2).
+        Parameters
+        ----------
+        fpath : Path, optional
+            File path for the corpus, by default None.
+        test_frac : float, optional
+            Fraction of data for the test set, by default 0.2.
+        labeled : bool, optional
+            Flag for labeled corpus, by default False.
+        shuffled_idx : bool, optional
+            Toggle index shuffling, by default False.
+        shuffled_gen : bool, optional
+            Toggle sample shuffling, by default False.
+        n_samples : int, optional
+            Number of samples, by default None.
+        text_only : bool, optional
+            Toggle text-only samples, by default False.
 
-        Returns:
-            Tuple[SampleGenerator, SampleGenerator]: A tuple of training and testing sample generators.
+        Returns
+        -------
+        Tuple[SampleGenerator, SampleGenerator]
+            Training and testing sample generators.
         """
 
         if labeled:
@@ -560,18 +688,28 @@ class CorpusProcessor:
 
     def generate_samples(self, *args, **kwargs):
         """
-        Generate document samples from the processed data.
-        This is essentially a partial function for `generate_train_test_sets`,
-        with test_frac=0.0, which returns a single iterator.
-
-        Returns:
-            SampleGenerator: A sample generator for the processed data.
+        Generate samples from the corpus.
         """
 
         # Initialize and return re-generator
         return self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
 
     def _preprocess_document(self, fpath: Path, separators=["", " ", "-"], **kwargs):
+        """
+        Preprocess a document from the corpus.
+
+        Parameters
+        ----------
+        fpath : Path
+            File path of the document.
+        separators : List[str], optional
+            List of separators for word combination, by default ["", " ", "-"].
+
+        Returns
+        -------
+        List[str]
+            List of preprocessed tokens.
+        """
 
         # Read all but the header
         with open(fpath, "r", encoding="utf-8") as f:
@@ -636,7 +774,25 @@ class CorpusProcessor:
         filter_stopwords: bool = True,
         **kwargs,
     ):
-        """Doc."""
+        """
+        Tokenize text from the document.
+
+        Parameters
+        ----------
+        text : str
+            Text to be tokenized.
+        specials_dict : Dict[str, str]
+            Dictionary for special tokens.
+        lemmatize : bool, optional
+            Toggle lemmatization, by default True.
+        filter_stopwords : bool, optional
+            Toggle stopwords filtering, by default True.
+
+        Returns
+        -------
+        List[str]
+            List of tokenized words.
+        """
 
         # Tokenize the text using simple_preprocess
         tokens = gensim.utils.simple_preprocess(text, min_len=2, max_len=20)
@@ -670,7 +826,19 @@ class CorpusProcessor:
         return tokens
 
     def _remove_consecutive_duplicates(self, tokens: List[str]):
-        """Doc."""
+        """
+        Remove consecutive duplicates from a list of tokens.
+
+        Parameters
+        ----------
+        tokens : List[str]
+            List of tokens.
+
+        Returns
+        -------
+        List[str]
+            List of tokens without consecutive duplicates.
+        """
 
         no_dups = [tokens[0]]
         for i in range(1, len(tokens)):
@@ -679,6 +847,20 @@ class CorpusProcessor:
         return no_dups
 
     def _convert_ordinal_to_words(self, number):
+        """
+        Convert ordinal numbers to their word equivalents.
+
+        Parameters
+        ----------
+        number : int
+            Ordinal number to convert.
+
+        Returns
+        -------
+        str
+            Ordinal number in word form.
+        """
+
         ordinals = {
             "1": "first",
             "2": "second",

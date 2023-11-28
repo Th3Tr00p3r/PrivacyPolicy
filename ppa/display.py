@@ -12,7 +12,58 @@ from wordcloud import WordCloud
 
 @dataclass
 class Plotter:
-    """A generalized, hierarchical plotting tool, designed to work as a context manager."""
+    """
+    A generalized, hierarchical plotting tool, designed to work as a context manager.
+
+    Attributes
+    ----------
+    parent_ax : Axes, optional
+        Parent axes object, by default None.
+    parent_figure : Figure, optional
+        Parent figure object, by default None.
+    figsize : Tuple[float, float], optional
+        Size of the figure, by default (5, 4).
+    fontsize : int, optional
+        Font size for the plot, by default 14.
+    subplots : Tuple[int, int], optional
+        Subplots configuration, by default (1, 1).
+    suptitle : str, optional
+        Title for the figure, by default None.
+    xlabel : str, optional
+        Label for the x-axis, by default None.
+    ylabel : str, optional
+        Label for the y-axis, by default None.
+    x_scale : str, optional
+        Scale for the x-axis, by default None.
+    y_scale : str, optional
+        Scale for the y-axis, by default None.
+    xlim : Tuple[float, float], optional
+        Limits for the x-axis, by default None.
+    ylim : Tuple[float, float], optional
+        Limits for the y-axis, by default None.
+    should_force_aspect : bool, optional
+        Flag for forcing aspect ratio, by default False.
+    should_autoscale : bool, optional
+        Flag for autoscaling, by default False.
+    selection_limits : Tuple[float, float], optional
+        Limits for manual selection, by default None.
+    should_close_after_selection : bool, optional
+        Flag to close the plot after manual selection, by default False.
+    subplot_kw : Dict[str, Any], optional
+        Additional keyword arguments for subplots, by default field(default_factory=dict).
+
+    Methods
+    -------
+    __enter__()
+        Prepare the 'axes' object to use in context manager.
+    __exit__(*exc)
+        Set axes and figure attributes, and show the plot if at the top of the hierarchy.
+    _quadratic_xscale_backwards(x)
+        Helper function for quadratic scaling.
+    _set_axis_attributes(ax)
+        Set attributes for a given Axes object.
+
+    """
 
     parent_ax: Axes = None
     # TODO: 'parent_figure' can be used for implementing 'subfigures', later on
@@ -70,7 +121,7 @@ class Plotter:
     def __exit__(self, *exc):
         """
         Set axes attributes.
-        Set figure attirbutes and show it, if Plotter is at top of hierarchy.
+        Set figure attributes and show it if Plotter is at top of hierarchy.
         """
 
         for ax in self.axes.flatten().tolist():
@@ -102,7 +153,20 @@ class Plotter:
             self.fig.canvas.draw_idle()
 
     def _quadratic_xscale_backwards(self, x):
-        """Doc"""
+        """
+        Helper function for quadratic scaling.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Input array for scaling.
+
+        Returns
+        -------
+        np.ndarray
+            Scaled output array.
+
+        """
 
         if (x < 0).any():
             new_x = np.empty(x.shape)
@@ -113,7 +177,15 @@ class Plotter:
             return x ** (1 / 2)
 
     def _set_axis_attributes(self, ax):
-        """Doc."""
+        """
+        Set attributes for a given Axes object.
+
+        Parameters
+        ----------
+        ax : Axes
+            Matplotlib Axes object.
+
+        """
 
         if self.should_force_aspect:
             force_aspect(ax, aspect=1)
@@ -142,6 +214,33 @@ class Plotter:
 def display_scatter(
     arr2d: np.ndarray, labels: List[str] = None, annots: List[str] = None, title="", **kwargs
 ):
+    """
+    Display scatter plot for 2D or 3D data.
+
+    Parameters
+    ----------
+    arr2d : np.ndarray
+        2D or 3D data array (sample rows, feature columns).
+    labels : List[str], optional
+        List of labels, by default None.
+    annots : List[str], optional
+        List of annotations, by default None.
+    title : str, optional
+        Title for the plot, by default "".
+    **kwargs
+        Additional keyword arguments for the plot.
+
+    Raises
+    ------
+    ValueError
+        If the array is not 2D or 3D.
+
+    Notes
+    -----
+    - For 3D data, the scatter plot is prepared with a 3D projection.
+
+    """
+
     if arr2d.ndim != 2:
         raise ValueError("Must supply a 2D array! (sample rows, feature columns)")
 
@@ -177,7 +276,25 @@ def display_scatter(
 
 
 def display_dim_reduction(arr2d, name: str, **kwargs):
-    """Expects a 2D matrix with 2/3 components (columns)"""
+    """
+    Display dimensionality-reduced data.
+
+    Parameters
+    ----------
+    arr2d : np.ndarray
+        2D matrix with 2 or 3 components (columns).
+    name : str
+        Name for the visualization.
+    **kwargs
+        Additional keyword arguments for the scatter plot.
+
+    Notes
+    -----
+    - Expects a 2D matrix with 2 or 3 components (columns).
+    - Uses 'display_scatter' internally for visualization.
+
+    """
+
     components = range(1, arr2d.shape[1] + 1)
     axis_labels_dict = {
         f"{ax_str}label": f"Principle Component {component_num}"
@@ -187,7 +304,22 @@ def display_dim_reduction(arr2d, name: str, **kwargs):
 
 
 def display_wordcloud(dct: Dictionary | Dict[str, int], per_doc: bool = False):
-    """Doc."""
+    """
+    Display a word cloud.
+
+    Parameters
+    ----------
+    dct : Dictionary | Dict[str, int]
+        Gensim Dictionary object or a word-frequency dictionary.
+    per_doc : bool, optional
+        Flag for per-document word frequency, by default False.
+
+    Notes
+    -----
+    - Creates a word cloud from the provided dictionary.
+    - Displays the word cloud using Matplotlib.
+
+    """
 
     # create a word-count (total or per-document) dictionary from a Gensim Dictionary object
     word_count_dict = {
@@ -209,8 +341,19 @@ def display_wordcloud(dct: Dictionary | Dict[str, int], per_doc: bool = False):
 
 def force_aspect(ax, aspect=1) -> None:
     """
-    See accepted answer here:
-    https://stackoverflow.com/questions/7965743/how-can-i-set-the-aspect-ratio-in-matplotlib
+    Set the aspect ratio for a matplotlib plot.
+
+    Parameters
+    ----------
+    ax : object
+        Matplotlib Axes object.
+    aspect : float, optional
+        Desired aspect ratio, by default 1.
+
+    Notes
+    -----
+    - Adjusts the aspect ratio of the plot using Matplotlib.
+    - See accepted answer here: https://stackoverflow.com/questions/7965743/how-can-i-set-the-aspect-ratio-in-matplotlib
     """
 
     with suppress(ValueError):

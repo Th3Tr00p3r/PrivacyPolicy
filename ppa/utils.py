@@ -11,7 +11,7 @@ from dataclasses import InitVar, dataclass, field
 from itertools import product
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Callable, List
+from typing import Any, Callable, List
 from winsound import Beep
 
 import numpy as np
@@ -20,6 +20,9 @@ import yaml  # type: ignore
 
 @dataclass
 class IndexedFile:
+    """
+    Class for handling indexed file operations.
+    """
 
     fpath: Path
     mode: str
@@ -29,7 +32,9 @@ class IndexedFile:
     shuffled: bool = False
 
     def __post_init__(self, index_suffix: str):
-        """Doc."""
+        """
+        Initialize the IndexedFile after object creation.
+        """
 
         self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
 
@@ -47,7 +52,9 @@ class IndexedFile:
                     self.key_pos_dict[key] = pos
 
     def __enter__(self):
-        """Doc."""
+        """
+        Enter the context manager.
+        """
 
         if self.mode == "read":
             self.file = open(self.fpath, "r")
@@ -62,7 +69,9 @@ class IndexedFile:
         return self
 
     def __exit__(self, *args):
-        """Doc."""
+        """
+        Exit the context manager.
+        """
 
         # close the data file
         self.file.close()
@@ -76,7 +85,16 @@ class IndexedFile:
                     idx_file.write("\n")
 
     def write(self, obj, notes: Iterable[str]):
-        """Doc."""
+        """
+        Write an object to the file.
+
+        Parameters
+        ----------
+        obj : Any
+            Object to be written to the file.
+        notes : Iterable[str]
+            Iterable containing notes for the object.
+        """
 
         if self.mode != "write":
             raise TypeError(f"You are attempting to write while mode={self.mode}!")
@@ -87,8 +105,20 @@ class IndexedFile:
         json.dump(obj, self.file)
         self.file.write("\n")
 
-    def read_idx(self, pos_idx: int):
-        """Doc."""
+    def read_idx(self, pos_idx: int) -> Any:
+        """
+        Read an object by index position.
+
+        Parameters
+        ----------
+        pos_idx : int
+            Index position of the object to be read.
+
+        Returns
+        -------
+        Any
+            Object read from the file.
+        """
 
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
@@ -96,8 +126,15 @@ class IndexedFile:
         self.file.seek(self.start_pos_list[pos_idx])
         return json.loads(self.file.readline())
 
-    def read_all(self):
-        """Doc."""
+    def read_all(self) -> Iterable[Any]:
+        """
+        Read all objects from the file.
+
+        Returns
+        -------
+        Iterable[Any]
+            Generator yielding all objects from the file.
+        """
 
         if self.shuffled:
             self.rng.shuffle(self.start_pos_list)
@@ -107,12 +144,41 @@ class IndexedFile:
                 yield json.loads(file.readline())
 
     def key_to_pos_idx(self, key: str) -> int:
-        """Doc."""
+        """
+        Get the position index of a key in the file.
 
+        Parameters
+        ----------
+        key : str
+            Key to search for in the file.
+
+        Returns
+        -------
+        int
+            Position index of the key in the file.
+        """
         return self.start_pos_list.index(self.key_pos_dict[key])
 
 
 def replace_most_common_phrase(phrases, text, special_token):
+    """
+    Replace the most common phrase found in the text with a special token.
+
+    Parameters
+    ----------
+    phrases : list[str]
+        List of phrases to search for in the text.
+    text : str
+        The text in which to search for the phrases.
+    special_token : str
+        The special token to replace the most common phrase found.
+
+    Returns
+    -------
+    str
+        Text with the most common phrase replaced by the special token.
+    """
+
     # Use a list comprehension to count occurrences of each phrase in the text
     counts_dict = {phrase: len(re.findall(phrase, text, flags=re.IGNORECASE)) for phrase in phrases}
     if any(counts_dict.values()):
@@ -127,8 +193,23 @@ def replace_most_common_phrase(phrases, text, special_token):
         return text
 
 
-# Function to find nearest neighbors and concatenate randomly
 def concatenate_nearest_neighbors(strings, n):
+    """
+    Concatenate nearest neighbors from a list of strings.
+
+    Parameters
+    ----------
+    strings : list[str]
+        List of strings to perform concatenation.
+    n : int
+        Number of strings to retain after concatenation.
+
+    Returns
+    -------
+    list[str]
+        List of strings after concatenation of nearest neighbors.
+    """
+
     while len(strings) > n:
         # Calculate distances (you might use a specific method based on your criteria)
         # For this example, let's randomly select neighbors to concatenate
@@ -142,6 +223,22 @@ def concatenate_nearest_neighbors(strings, n):
 
 
 def combine_with_separators(words, separators):
+    """
+    Combine words with separators to generate all combinations.
+
+    Parameters
+    ----------
+    words : list[str]
+        List of words to combine.
+    separators : list[str]
+        List of separators for combination.
+
+    Returns
+    -------
+    list[str]
+        List of combined strings with separators.
+    """
+
     # Generate all combinations of separators for the given number of words
     separator_combinations = product(separators, repeat=len(words) - 1)
 
@@ -154,14 +251,33 @@ def combine_with_separators(words, separators):
 
 
 def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):
-    """Doc."""
+    """
+    Get the file index path based on the given file path and suffix.
+
+    Parameters
+    ----------
+    fpath : Path
+        Path to the file.
+    index_suffix : str, optional
+        Index suffix for the file, by default "_idx".
+
+    Returns
+    -------
+    Path
+        The file index path.
+    """
 
     return Path(fpath.parent) / f"{fpath.stem}{index_suffix}{''.join(fpath.suffixes)}"
 
 
 def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):
     """
-    Configure the logging package for the whole application and ensure folder and initial files exist.
+    Configure the logging package and ensure folder and initial files exist.
+
+    Parameters
+    ----------
+    log_path : Path, optional
+        Path to the log files directory, by default parent directory + "/logs".
     """
 
     Path.mkdir(log_path, parents=True, exist_ok=True)
@@ -177,20 +293,48 @@ def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):
 
 def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
     """
-    Meant to be used as a decorator (@helper.timer(threshold))
-    for quickly setting up function timing for testing.
-    Works for both regular and asynchronous functions.
-    NOTE - asynchronous function timing may include stuff that happens
-        while function 'awaits' other coroutines.
+    Decorator for function timing used for testing.
+
+    Parameters
+    ----------
+    threshold_ms : float, optional
+        Threshold for time in milliseconds, by default 0.0
+    beep : bool, optional
+        Boolean indicating whether to beep on threshold exceedance, by default True
+
+    Returns
+    -------
+    Callable
+        Wrapper function for timing the decorated function.
     """
 
     def outer_wrapper(func) -> Callable:
-        """Doc."""
+        """
+        Outer wrapper function to handle timing for both regular and asynchronous functions.
+        """
 
         if asyncio.iscoroutinefunction(func):
             # timing async funcitons
             @functools.wraps(func)
             async def wrapper(*args, should_time: bool = True, **kwargs):
+                """
+                Wrapper function for timing asynchronous functions.
+
+                Parameters
+                ----------
+                args : tuple
+                    Positional arguments for the function.
+                should_time : bool, optional
+                    Boolean indicating whether to calculate and log time, by default True
+                kwargs : dict
+                    Keyword arguments for the function.
+
+                Returns
+                -------
+                Any
+                    Value returned by the decorated asynchronous function.
+                """
+
                 if should_time:
                     tic = time.perf_counter()
                     value = await func(*args, **kwargs)
@@ -209,6 +353,24 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
 
             @functools.wraps(func)
             def wrapper(*args, should_time: bool = True, **kwargs):
+                """
+                Wrapper function for timing regular functions.
+
+                Parameters
+                ----------
+                args : tuple
+                    Positional arguments for the function.
+                should_time : bool, optional
+                    Boolean indicating whether to calculate and log time, by default True
+                kwargs : dict
+                    Keyword arguments for the function.
+
+                Returns
+                -------
+                Any
+                    Value returned by the decorated function.
+                """
+
                 if should_time:
                     tic = time.perf_counter()
                     value = func(*args, **kwargs)

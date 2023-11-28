@@ -23,7 +23,10 @@ from ppa.utils import timer
 
 
 class D2VClassifier(BaseEstimator):
-    """Doc."""
+    """
+    Classifier using Doc2Vec model for vectorizing and predicting document categories.
+    Built to integrate with scikit-learn as well as using custom data-loading structures for Gensim's Doc2Vec model.
+    """
 
     def __init__(
         self,
@@ -43,7 +46,38 @@ class D2VClassifier(BaseEstimator):
         negative: int = 5,
         workers: int = 1,
     ):
+        """
+        Initialize the Doc2Vec Classifier.
 
+        Parameters
+        ----------
+        epochs : int
+            Number of training epochs.
+        iterative_training : bool, optional
+            Flag indicating iterative training, by default False.
+        train_score : bool, optional
+            Flag to compute training score, by default False.
+        random_state : int, optional
+            Random seed for reproducibility, by default None.
+        threshold : float, optional
+            Threshold for decision making, by default 0.5.
+        vector_size : int, optional
+            Dimensionality of the feature vectors, by default 300.
+        dm : int, optional
+            Model architecture; distributed memory (DM) vs distributed bag of words (DBOW), by default 1.
+        window : int, optional
+            Maximum distance between the current and predicted word within a sentence, by default 5.
+        min_count : int, optional
+            Ignores all words with a total frequency lower than this, by default 5.
+        sample : float, optional
+            Threshold for configuring which higher-frequency words are randomly downsampled, by default 1e-3.
+        hs : int, optional
+            If 1, hierarchical softmax will be used for model training, by default 0.
+        negative : int, optional
+            If > 0, negative sampling will be used, by default 5.
+        workers : int, optional
+            Number of worker threads to train the model, by default 1.
+        """
         # Loop through the arguments and set attributes dynamically
         arguments = locals()
         del arguments["self"]  # Remove 'self' from the dictionary
@@ -52,7 +86,25 @@ class D2VClassifier(BaseEstimator):
 
     @timer(1000)
     def fit(self, X: SampleGenerator, y, X_test: SampleGenerator = None, y_test=None):
-        """Doc."""
+        """
+        Fit the Doc2Vec Classifier.
+
+        Parameters
+        ----------
+        X : SampleGenerator
+            Training samples.
+        y : array-like
+            Target labels.
+        X_test : SampleGenerator, optional
+            Test samples, by default None.
+        y_test : array-like, optional
+            Test labels, by default None.
+
+        Returns
+        -------
+        D2VClassifier
+            Instance of the fitted classifier.
+        """
 
         # Initialize both models
         self.model = Doc2Vec(
@@ -150,7 +202,27 @@ class D2VClassifier(BaseEstimator):
         min_alpha=None,
         **kwargs,
     ) -> np.ndarray:
-        """Doc."""
+        """
+        Transform the input documents into vector embeddings.
+
+        Parameters
+        ----------
+        X : SampleGenerator
+            Input documents.
+        normalized : bool, optional
+            Flag to normalize the vectors, by default False.
+        epochs : int, optional
+            Number of epochs for inference, by default None.
+        alpha : float, optional
+            Initial learning rate, by default None.
+        min_alpha : float, optional
+            Final learning rate, by default None.
+
+        Returns
+        -------
+        np.ndarray
+            Vector embeddings of the input documents.
+        """
 
         logging.info(
             f"[Estimator.transform] Inferring{' normalized ' if normalized else ' '}vector embeddings for {len(X):,} documents..."
@@ -171,7 +243,21 @@ class D2VClassifier(BaseEstimator):
             return X_vec
 
     def decision_function(self, X=None, X_vec=None, **kwargs) -> np.ndarray:
-        """Doc."""
+        """
+        Compute decision function scores based on similarity between vectors.
+
+        Parameters
+        ----------
+        X : SampleGenerator, optional
+            Input documents, by default None.
+        X_vec : np.ndarray, optional
+            Vector embeddings, by default None.
+
+        Returns
+        -------
+        np.ndarray
+            Decision function scores.
+        """
 
         # Transform X if X_vec is not supplied (default)
         if X_vec is None:
@@ -187,7 +273,23 @@ class D2VClassifier(BaseEstimator):
     def predict(
         self, X: SampleGenerator, threshold: float = None, get_scores=False, **kwargs
     ) -> np.ndarray | Tuple[np.ndarray, np.ndarray]:
-        """Doc."""
+        """
+        Predict labels based on decision function scores.
+
+        Parameters
+        ----------
+        X : SampleGenerator
+            Input documents.
+        threshold : float, optional
+            Threshold for decision making, by default None.
+        get_scores : bool, optional
+            Flag to return scores along with predictions, by default False.
+
+        Returns
+        -------
+        np.ndarray or Tuple[np.ndarray, np.ndarray]
+            Predicted labels or labels with scores.
+        """
 
         threshold = threshold if threshold is not None else self.threshold
         scores = self.decision_function(X, **kwargs)
@@ -199,7 +301,23 @@ class D2VClassifier(BaseEstimator):
 
     #     @timer(1000)
     def score(self, X: SampleGenerator, y: List[str], plot=False, **kwargs):
-        """Doc."""
+        """
+        Compute the balanced accuracy score and other evaluation metrics.
+
+        Parameters
+        ----------
+        X : SampleGenerator
+            Input documents.
+        y : List[str]
+            Target labels.
+        plot : bool, optional
+            Flag to enable plotting, by default False.
+
+        Returns
+        -------
+        float
+            Balanced accuracy score.
+        """
 
         # convet labeles to an array and keep only "good"/"bad" elements, and their indices
         y_true, labeled_idxs = self.valid_labels(y)
@@ -237,7 +355,19 @@ class D2VClassifier(BaseEstimator):
         return bal_acc
 
     def valid_labels(self, y) -> Tuple[np.ndarray, np.ndarray]:
-        """Doc."""
+        """
+        Filter and convert labels to valid numerical format.
+
+        Parameters
+        ----------
+        y : array-like
+            Target labels.
+
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            Tuple containing valid labels and indices.
+        """
 
         conv_dict = dict(unlabeled=np.nan, good=-1, bad=1)
         y_arr = np.array([conv_dict[label] for label in y])
@@ -246,7 +376,25 @@ class D2VClassifier(BaseEstimator):
 
     @timer(1000)
     def sanity_check(self, X_train: SampleGenerator, n_samples=1_000, max_rank=None, plot=False):
-        """Doc."""
+        """
+        Perform a sanity check to evaluate model performance.
+
+        Parameters
+        ----------
+        X_train : SampleGenerator
+            Training samples.
+        n_samples : int, optional
+            Number of samples for the check, by default 1_000.
+        max_rank : int, optional
+            Maximum rank for similarity evaluation, by default None.
+        plot : bool, optional
+            Flag to enable plotting, by default False.
+
+        Returns
+        -------
+        Dict
+            Sorted rank counts.
+        """
 
         max_rank = max_rank or len(self.model.dv)
         ranks = []

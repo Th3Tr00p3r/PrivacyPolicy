@@ -307,44 +307,18 @@ print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
 
 ratings_df.sample(10)
 
+# %%
+ratings_df
 
 # %% [markdown]
-# ## 3.2 Exploration
-# ### 3.2.1 Checking for duplicates in data according to rating IDs
-#
-# Let's try to check what policies with duplicate IDs look like - are they really the same? Note that ToS;DR rates terms-of-service together with privacy policies - I don't really know what same IDs mean!
-#
-# To do this, let's take the ID with, say, 5 entries in `ratings_df`:
+# ## 3.2 Checking for Bias in Labeled Data
 
 # %%
-# ratings_df['id'].value_counts()[ratings_df['id'].value_counts() == 5]
+letter_count_dict = dict(sorted(Counter(ratings_df["rating"]).items()))
 
-# %% [markdown]
-# choosing one of them
+with Plotter(suptitle="Letter Rating Counts", xlabel="Letter Rating", ylabel="Counts") as ax:
+    ax.bar(letter_count_dict.keys(), letter_count_dict.values())
 
-# %%
-# result = ratings_df[ratings_df['id'] == 9465]
-# result
-
-# %% [markdown]
-# and find all matching tags (URLs) in the corpus (both training and testing):
-
-# %%
-# corpus, _ = cp.generate_train_test_sets(test_frac=0)
-
-# training_samples = [tagged_doc for tagged_doc in corpus if tagged_doc.tags[0] in result["tag"].tolist()]
-
-# training_samples
-
-# %% [markdown]
-# It appears that at least for one ID, the privacy policies are different. This makes sense in that IDs (an also scores) are not for privacy policies, but for companies/URLs. For now, we will disregard the IDs.
-
-# %% [markdown]
-# ### 3.2.2 Checking for Bias in Labeled Data
-
-# %%
-# with Plotter() as ax:
-#     ax.hist(sorted(ratings_df["rating"]))
 
 # %% [markdown]
 # As one might expect, good privacy policies are hard to come by. As such, I will, for now, label privacy policies as either 'good' ('A' or 'B' rating) vs. 'bad' ('C', 'D', or 'E' rating):
@@ -361,10 +335,12 @@ def relabel_rating(rating: str):
         return rating
 
 
-ratings_df["rating"] = ratings_df["rating"].apply(relabel_rating)
+ratings_df["label"] = ratings_df["rating"].apply(relabel_rating)
 
-with Plotter() as ax:
-    ax.hist(sorted(ratings_df["rating"]))
+label_count_dict = dict(sorted(Counter(ratings_df["label"]).items()))
+
+with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
+    ax.bar(label_count_dict.keys(), label_count_dict.values())
 
 # %% [markdown]
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
@@ -376,8 +352,8 @@ with Plotter() as ax:
 # SHOULD_FORCE_LABELING = True
 SHOULD_FORCE_LABELING = False
 
-url_rating_dict = ratings_df.set_index("tag")["rating"].to_dict()
-cp.add_label_tags(url_rating_dict, force=SHOULD_FORCE_LABELING)
+url_label_dict = ratings_df.set_index("tag")["label"].to_dict()
+cp.add_label_tags(url_label_dict, force=SHOULD_FORCE_LABELING)
 
 # %% [markdown]
 # # 4. Modeling
@@ -420,6 +396,7 @@ import time
 SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
+    # initialize classifier
     classifier = D2VClassifier(
         random_state=cp.seed,
         window=5,
@@ -430,8 +407,11 @@ if SHOULD_FIT_MODEL:
         workers=psutil.cpu_count(logical=False) - 1,
     )
 
+    # fit the model
     classifier.fit(train_set, train_set.labels, X_test=test_set, y_test=test_set.labels)
-    classifier.score(test_set, test_set.labels)
+
+    # score the model
+    print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
 
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
@@ -458,13 +438,16 @@ if not SHOULD_FIT_MODEL:
     model_fname = f"pp_d2v_{MODEL_DT}.model"
     classifier.model = Doc2Vec.load(f"D:/MEGA/Programming/ML/PPA/ppa/models/{model_fname}")
 
+    # score the model
+    print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
+
     # Beep when done
     Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
 #
-# Doc2Vec, using secondary tags, is a weakly semi-supervised model, so finding a metric to evaluate it is not a straightforward task.
+# Doc2Vec, using secondary tags, is at best a weakly semi-supervised model, so finding a metric to evaluate it is not a straightforward task.
 # Since I am still basically doing EDA, let's take a look at the test data in the learned vector embeddings, and see if any clusters emerge. My current short-term goal is to classify policies as "good" or "bad" (for the end-user, of course!), so I'm hoping to be able to see some clear boundries in the data.
 
 # %% [markdown]
@@ -481,8 +464,8 @@ classifier.sanity_check(train_set, max_rank=10, plot=True)
 # %%
 # Infer document vectors for the test data
 # convet labeles to an array and keep only "good"/"bad" elements, and their indices
-labeled_test_tags, labeled_idxs = classifier.valid_labels(test_set.labels)
-test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_idxs)[0])
+labeled_test_tags, labeled_test_idxs = classifier.valid_labels(test_set.labels)
+test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_test_idxs)[0])
 test_vectors_labeled = classifier.transform(test_set_labeled, normalized=True)
 
 # Beep when done
@@ -532,55 +515,54 @@ tsne_result = tsne.fit_transform(test_vectors_labeled)
 display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
-# I cannot see any pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualization doesn't appear to capture it.
+# I cannot see any pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualizations don't seem to capture it.
 
 # %% [markdown]
-# ## 5.3 Devising a metric
+# ## 5.3 Devising a metric <a id='sec-5-3'></a>
 # Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly. We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies, as well as for the rest of the (unlabeled) policies:
 
 # %%
-y_scores_labeled = classifier.decision_function(test_set_labeled)
-y_scores_unlabeled = classifier.decision_function(
-    test_set.sample(1_000, idxs=np.nonzero(~labeled_idxs)[0])
+y_test_scores_labeled = classifier.decision_function(test_set_labeled)
+y_test_scores_unlabeled = classifier.decision_function(
+    test_set.sample(1_000, idxs=np.nonzero(~labeled_test_idxs)[0])
 )
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
-
 # %%
 with Plotter(
     figsize=(10, 6),
     xlabel="Similarity Scores",
-    ylabel="Frequency",
+    ylabel="Bin Counts (Density)",
     suptitle="Distribution of Similarity Scores",
 ) as ax:
 
     # Plot the distribution of similarity scores
     ax.hist(
-        good_scores := y_scores_labeled[labeled_test_tags == -1],
+        good_scores := y_test_scores_labeled[labeled_test_tags == -1],
         bins=int(np.sqrt(good_scores.size)),
         density=True,
         alpha=0.6,
-        label="Good",
+        label=f"Good ({good_scores.size})",
     )
     ax.hist(
-        bad_scores := y_scores_labeled[labeled_test_tags == 1],
+        bad_scores := y_test_scores_labeled[labeled_test_tags == 1],
         bins=int(np.sqrt(bad_scores.size)),
         density=True,
         alpha=0.6,
-        label="Bad",
+        label=f"Bad ({bad_scores.size})",
     )
     ax.hist(
-        y_scores_unlabeled,
-        bins=int(np.sqrt(len(y_scores_unlabeled))),
+        y_test_scores_unlabeled,
+        bins=int(np.sqrt(len(y_test_scores_unlabeled))),
         density=True,
         alpha=0.3,
-        label="Unlabeled (sample)",
+        label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
         zorder=1,
     )
 
-    ax.legend()
+    ax.legend(title="Label (Num.)")
     ax.grid(True)
 
 # %% [markdown]
@@ -588,44 +570,219 @@ with Plotter(
 
 # %% [markdown]
 # ### 5.3.1 Investigating Specific Policies
-# In the distributions above we can see significant overlap between good/bad policies, including some which appear score far beyond their group mean. Lets try to understand why - this could be the key to devise a better model.
+# In the distributions above we can see significant overlap between good/bad policies, including some outliers which score far beyond their group mean. Lets try to understand why - this could be the key to devise a better model.
 
 # %% [markdown]
-# Let's get the URLs for "bad" labeled policies which have scores above `0.525`:
+# Let's get the URLs, labels and scores in a `DataFrame`:
 
 # %%
-bad_outlier_policies = [
-    test_set[idx]
-    for idx, (label, score) in enumerate(zip(test_set_labeled.labels, y_scores_labeled))
-    if label == "bad" and score >= 0.525
-]
-
-print("Bad outlier URLs: ", [td.tags[0] for td in bad_outlier_policies])
-print("Bad outlier lengths: ", [len(td.words) for td in bad_outlier_policies])
+df = pd.DataFrame(
+    {
+        "url": [td.tags[0] for td in test_set_labeled],
+        "label": test_set_labeled.labels,
+        "score": y_test_scores_labeled,
+    }
+)
 
 # %% [markdown]
-# # TODO: try checking out the most similar "good" policy for each? Other similarity queries from Gensim? What about the badly-scored "good" policies? The best I can hope for is wrong labels?
+# What seems interesting to test now is what the actual 'letter score' (from ToS;DR) is for each of the so-called outliers among the top scores - if the outliers are all 'C's, this could mean that them being labeled "bad" is a consequence of the binary labeling forced unto the 5 letter ratings:
 
 # %%
-IDX = -1
-print(bad_outlier_policies[IDX].tags[0])
-" ".join(bad_outlier_policies[IDX].words)
-
-# %%
-list(zip(test_set_labeled.labels, y_scores_labeled))
+merged_df = pd.merge(df, ratings_df[["tag", "rating"]], left_on="url", right_on="tag", how="left")
+df["letter"] = merged_df["rating"]
+df.sort_values(by="score", ascending=False).iloc[:20]
 
 # %% [markdown]
-# ## 5.4 Considering Pseudo-Labeling
+# So, while "bad"-labled policies with high scores are indeed 'C's, there are some 'D' there too. Let's check out the distributions as in 5.3, this time separated and colored by letter rating:
 
 # %%
-# Infer document vectors for the test data
-# convet labeles to an array and keep only "good"/"bad" elements, and their indices
-_, labeled_idxs = classifier.valid_labels(test_set.labels)
-test_set_unlabeled = [test_set[idx] for idx in np.nonzero(~labeled_idxs)[0]]
-test_vectors_labeled = classifier.transform(test_set_labeled)
+with Plotter(
+    suptitle="Histograms of Scores by Letter Rating",
+    xlabel="Score",
+    ylabel="Bin Counts (Density)",
+) as ax:
+
+    # Iterate through unique letters and plot histograms for each
+    for letter in sorted(df["letter"].unique(), reverse=True):
+        scores_for_letter = df[df["letter"] == letter]["score"]
+        ax.hist(
+            scores_for_letter,
+            bins=int(np.sqrt(len(scores_for_letter))),
+            density=True,
+            alpha=0.25,
+            label=f"{letter} ({len(scores_for_letter):,})",
+        )
+
+    ax.hist(
+        y_test_scores_unlabeled,
+        bins=int(np.sqrt(len(y_test_scores_unlabeled))),
+        density=True,
+        alpha=0.5,
+        label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
+        zorder=-1,
+    )
+
+    ax.legend(title="Letter (Num.)")
+
+# %% [markdown]
+# We can see that all but the 'E'-rated policies have some tail in the high-scores, and even more disturbing is the fact that most 'A'-rated policies have fairly low scores!
+
+# %% [markdown]
+# One solution for this could be simply wrong labels. Let's check out the worst-scored "good" policies. Since there are so little labeled policies in thee test set, we can check them all out together in one table:
+
+# %%
+df[df["label"] == "good"].sort_values(by="score")
+
+# %%
+" ".join(test_set["vpl.ca"].words)
+
+# %% [markdown]
+# Since I recognize some of the URLs as having legitimately "good" privacy policies, and the worst scored one is that of Vancouver's public library, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
+
+# %% [markdown]
+# # 6 Considering Upsampling and Pseudo-Labeling
+#
+# Being unable to increase my model's balanced-accuracy metric above about 0.8 using hyperparameter tuning or better data pre-processing (I have tinkered with both for a while now). What could be the reason is the imbalance existing in the data - there are about 17 times more "bad" labels than "good" ones, and I expect about the same imbalance in the unlabeled corpus. I can attempt to improve the data in two (possibly combined) methods:
+# * **Upsampling (mixing-in copies of) "good"-labeled policies in the training data**: This might make the model 'understand' "good" policies better, as the data will be less biased (need to watch for overfitting of the "good" policies)
+# * **Pseudo-labeling unlabeled training data using high/low thresholds for prediction**: This would make the scoring more robust as model summary vectors (specifically the "good" one) are averaged over more samples, enabling finer tuning according to score. This could also potentially enable supervised classification later on.
+
+# %% [markdown]
+# ## 6.1 Pseudo-Labeling
+#
+# ### 6.1.1 Score Thresholds
+# First, let's see how many candidates I have for pseudo-labeling. Taking a look again at the histograms in [5.3](#sec-5-3), I can "safely" set the thresholds at below 0.46 for "bad" policies and above 0.55 for "good" policies. Let's see how many new labeles I would be able to obtain this way. Let's try plotting the score distributions for the training set.
+#
+# <!--
+# We begin by getting the scores for the training set vectors, which are essentially the model's 'document vectors' (no need to infer):
+# # TODO: instead of iterating over the disk-bound corpus for getting merely the relevant URLs, use the index file!
+# # TODO: Figure out why I get normal-like distributions for all classes (good, bad, unlabeled) when using the model vectors instead of inferred vectors
+#
+# CODE (for using model's 'document vectors' instead of inference):
+# # convet labeles to an array and keep only "good"/"bad" elements, and their indices
+# train_labels, labeled_train_idxs = classifier.valid_labels(train_set.labels)
+#
+# # get the labeled/unlabeled training set
+# train_set_labeled = train_set.sample(idxs=np.nonzero(labeled_train_idxs)[0])
+# train_set_unlabeled = train_set.sample(idxs=np.nonzero(~labeled_train_idxs)[0])
+#
+# # Get transformed train set (labeled)
+# train_vec_labeled = np.empty((len(train_set_labeled), classifier.model.vector_size))
+# for idx, td in enumerate(train_set_labeled):
+#     train_vec_labeled[idx] = classifier.model.dv[td.tags[0]]
+#
+# # Get transformed train set (unlabeled)
+# train_vec_unlabeled = np.empty((len(train_set_unlabeled), classifier.model.vector_size))
+# for idx, td in enumerate(train_set_unlabeled):
+#     train_vec_unlabeled[idx] = classifier.model.dv[td.tags[0]]
+#
+# # get the scores
+# y_train_scores_labeled = classifier.decision_function(X_vec=train_vec_labeled)
+# y_train_scores_unlabeled = classifier.decision_function(X_vec=train_vec_unlabeled)
+#
+# # Beep when done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+#
+# -->
+#
+# We begin by inferring vectors for all training policies and getting the scores (THIS MIGHT TAKE A WHILE!):
+
+# %%
+# get indices for labeled training samples
+train_labels, labeled_train_idxs = classifier.valid_labels(train_set.labels)
+
+# getting the
+y_train_scores_labeled = classifier.decision_function(
+    train_set.sample(idxs=np.nonzero(labeled_train_idxs)[0])
+)
+y_train_scores_unlabeled_sample = classifier.decision_function(
+    train_set.sample(1_000, idxs=np.nonzero(~labeled_train_idxs)[0])
+)
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+with Plotter(
+    figsize=(10, 6),
+    xlabel="Similarity Scores",
+    ylabel="Bin Counts (Density)",
+    suptitle="Distribution of Similarity Scores",
+) as ax:
+
+    # Plot the distribution of similarity scores
+    ax.hist(
+        good_scores := y_train_scores_labeled[train_labels == -1],
+        bins=int(np.sqrt(good_scores.size)),
+        density=True,
+        alpha=0.6,
+        label=f"Good ({good_scores.size:,})",
+    )
+    ax.hist(
+        bad_scores := y_train_scores_labeled[train_labels == 1],
+        bins=int(np.sqrt(bad_scores.size)),
+        density=True,
+        alpha=0.6,
+        label=f"Bad ({bad_scores.size:,})",
+    )
+    ax.hist(
+        y_train_scores_unlabeled_sample,
+        bins=int(np.sqrt(len(y_train_scores_unlabeled_sample))),
+        density=True,
+        alpha=0.3,
+        label=f"Unlabeled (sample of {len(y_train_scores_unlabeled_sample):,})",
+        zorder=1,
+    )
+
+    ax.legend(title="Label (Num.)")
+    ax.grid(True)
+
+# %% [markdown]
+# Reassuringly, the distributions look similar to the test distributions ([5.3](#sec-5-3)).
+#
+# Now, let's count how many new good/bad pseudo-labeled policies we can hope for, in a preliminary iteration. For this, we need to get the scores for the entire unlabeled training corpus (for displaying the distribution, only a small sample was used):
+
+# %%
+y_train_scores_unlabeled = classifier.decision_function(
+    train_set.sample(idxs=np.nonzero(~labeled_train_idxs)[0])
+)
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %% [markdown]
+# Now let's set the thresholds to "safe" values according to the "good"/"bad" distributions above:
+
+# %%
+print(
+    f"Unlabeled score range: {min(y_train_scores_unlabeled):.2f}-{max(y_train_scores_unlabeled):.2f}"
+)
+
+THRESH_GOOD = 0.55
+THRESH_BAD = 0.44
+
+print("Potential 'good' pseudo-labels: ", sum(y_train_scores_unlabeled > THRESH_GOOD))
+print("Potential 'bad' pseudo-labels: ", sum(y_train_scores_unlabeled < THRESH_BAD))
+
+# %% [markdown]
+# It appears that we can barely squeeze out about 20 new "good" labels...
+
+# %% [markdown]
+# ### 6.1.2 Most-Similar Labeled Policies
+#
+# A different Idea, utilizing Doc2Vec's prized similarity methods, could be checking out the most similar labeled policies for each unlabeled policy - the general idea is that if for a specific unlabeled policiy, the N most similar labeled documents are of a specific label (and above a certain similarity score), we could label it the same. We should try it out with a small sample of unlabeld policies first:
+
+# %% [markdown]
+# # TODO: TRY THIS
+
+# %%
+
+# %% [markdown]
+# Let's try improving the model with upsampling first.
+
+# %% [markdown]
+# ## 6.2 Upsampling
+# Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have (NOT YET) added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set:
+# # TODO: IMPLEMENT UPSAMPLING
 
 # %%
 raise RuntimeError("STOP HERE!")

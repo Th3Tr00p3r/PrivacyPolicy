@@ -63,7 +63,6 @@ class SampleGenerator:
             self.start_pos_list,
             self.index_suffix,
         )
-        self.in_memory: bool = False
         self._labels: List[str] = []
 
     def __repr__(self):
@@ -71,6 +70,7 @@ class SampleGenerator:
 
     def sample(self, n: int = None, idxs: List[int] | np.ndarray = None):
         """Doc."""
+        # TODO: enable using logical indexing with a Numpy True/False array as well as actual indices.
 
         start_pos_list = copy(self.start_pos_list)
         if idxs is not None:
@@ -94,47 +94,36 @@ class SampleGenerator:
         Iterate over samples in the data file.
         """
 
-        # samples on disk
-        if not self.in_memory:
-            for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
-                if not self.text_only:
-                    yield TaggedDocument(*deserialized_obj)
-                else:
-                    yield deserialized_obj[0]
+        for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
+            if not self.text_only:
+                yield TaggedDocument(*deserialized_obj)
+            else:
+                yield deserialized_obj[0]
 
-        # samples in RAM
-        else:
-            if self.shuffled:
-                self.rng.shuffle(self._sample_list)
-            yield from self._sample_list
-
-    def __getitem__(self, pos_idx: int | slice) -> TaggedDocument:
+    def __getitem__(self, pos_idx: int | slice | str) -> TaggedDocument:
         """Doc."""
 
-        # samples on disk
-        if not self.in_memory:
-            # handle slice objects
-            if isinstance(pos_idx, slice):
-                start, stop, step = pos_idx.indices(len(self))
-                pos_idxs: List[int] | range = range(start, stop, step)
-            else:
-                pos_idxs = [pos_idx]
-
-            # get samples by index/indices
-            samples = []
-            for pos_idx in pos_idxs:
-                with self.indexed_file(shuffled=False) as idx_input_file:
-                    samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
-
-            # if more than one sample, return as list
-            if len(samples) > 1:
-                return samples
-            else:
-                return samples[0]
-
-        # samples in RAM (regular list __getitem__)
+        # handle slice objects
+        if isinstance(pos_idx, slice):
+            start, stop, step = pos_idx.indices(len(self))
+            pos_idxs: List[int | str] | range = range(start, stop, step)
         else:
-            return self._sample_list[pos_idx]
+            pos_idxs = [pos_idx]
+
+        # get samples by index/indices
+        samples = []
+        for pos_idx in pos_idxs:
+            # convert key to index (optional getting by URL)
+            if isinstance(pos_idx, str):
+                pos_idx = self.indexed_file().key_to_pos_idx(pos_idx)
+            with self.indexed_file() as idx_input_file:
+                samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
+
+        # if more than one sample, return as list
+        if len(samples) > 1:
+            return samples
+        else:
+            return samples[0]
 
     def __len__(self):
         """Doc."""
@@ -159,13 +148,6 @@ class SampleGenerator:
 
         self._labels = [url_label_dict[url] for url in urls]
         return self._labels
-
-    def load_to_memory(self):
-        """Doc."""
-
-        self._get_labels()
-        self._sample_list = list(self)
-        self.in_memory = True
 
 
 @dataclass

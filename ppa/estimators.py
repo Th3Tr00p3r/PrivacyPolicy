@@ -1,9 +1,9 @@
 import logging
 from collections import Counter
-from typing import List, Tuple  # , Set
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
-from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+from gensim.models.doc2vec import Doc2Vec
 from sklearn.base import BaseEstimator
 
 # from sklearn.ensemble import IsolationForest
@@ -18,9 +18,8 @@ from sklearn.metrics import (
 )
 
 from ppa.display import Plotter
+from ppa.processing import SampleGenerator
 from ppa.utils import timer
-
-# from ppa.utils import timer
 
 
 class D2VClassifier(BaseEstimator):
@@ -52,7 +51,7 @@ class D2VClassifier(BaseEstimator):
             setattr(self, key, value)
 
     @timer(1000)
-    def fit(self, X, y, X_test=None, y_test=None):
+    def fit(self, X: SampleGenerator, y, X_test: SampleGenerator = None, y_test=None):
         """Doc."""
 
         # Initialize both models
@@ -144,7 +143,7 @@ class D2VClassifier(BaseEstimator):
 
     def transform(
         self,
-        X: List[TaggedDocument],
+        X: SampleGenerator,
         normalized=False,
         epochs=None,
         alpha=None,
@@ -156,12 +155,11 @@ class D2VClassifier(BaseEstimator):
         logging.info(
             f"[Estimator.transform] Inferring{' normalized ' if normalized else ' '}vector embeddings for {len(X):,} documents..."
         )
-        X_vec = np.array(
-            [
-                self.model.infer_vector(td.words, epochs=epochs, alpha=alpha, min_alpha=min_alpha)
-                for td in X
-            ]
-        )
+        X_vec = np.empty((len(X), self.model.vector_size), dtype=float)
+        for idx, td in enumerate(X):
+            X_vec[idx] = self.model.infer_vector(
+                td.words, epochs=epochs, alpha=alpha, min_alpha=min_alpha
+            )
 
         if normalized:
             # Compute L2 norm for each row
@@ -172,10 +170,12 @@ class D2VClassifier(BaseEstimator):
         else:
             return X_vec
 
-    def decision_function(self, X, **kwargs) -> np.ndarray:
+    def decision_function(self, X=None, X_vec=None, **kwargs) -> np.ndarray:
         """Doc."""
 
-        X_vec = self.transform(X, **kwargs)
+        # Transform X if X_vec is not supplied (default)
+        if X_vec is None:
+            X_vec = self.transform(X, **kwargs)
 
         # Use similaities between mean good/bad train vectors and samples to compute scores
         good_sims = self.model.dv.cosine_similarities(self.model.dv["good"], X_vec)
@@ -185,7 +185,7 @@ class D2VClassifier(BaseEstimator):
 
     #     @timer(1000)
     def predict(
-        self, X, threshold: float = None, get_scores=False, **kwargs
+        self, X: SampleGenerator, threshold: float = None, get_scores=False, **kwargs
     ) -> np.ndarray | Tuple[np.ndarray, np.ndarray]:
         """Doc."""
 
@@ -198,14 +198,14 @@ class D2VClassifier(BaseEstimator):
             return y_pred
 
     #     @timer(1000)
-    def score(self, X: List[TaggedDocument], y: List[str], plot=False, **kwargs):
+    def score(self, X: SampleGenerator, y: List[str], plot=False, **kwargs):
         """Doc."""
 
         # convet labeles to an array and keep only "good"/"bad" elements, and their indices
         y_true, labeled_idxs = self.valid_labels(y)
 
         # scoring is only possible on labeled samples
-        X_labeled = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
+        X_labeled = X.sample(idxs=np.nonzero(labeled_idxs)[0])
 
         # predict and get scores
         y_pred, y_scores = self.predict(X_labeled, get_scores=True, **kwargs)
@@ -245,7 +245,7 @@ class D2VClassifier(BaseEstimator):
         return y_arr[labeled_idxs], labeled_idxs
 
     @timer(1000)
-    def sanity_check(self, X_train, n_samples=1_000, max_rank=None, plot=False):
+    def sanity_check(self, X_train: SampleGenerator, n_samples=1_000, max_rank=None, plot=False):
         """Doc."""
 
         max_rank = max_rank or len(self.model.dv)
@@ -269,7 +269,7 @@ class D2VClassifier(BaseEstimator):
             ranks.append(rank)
 
         # count the similarity rank
-        sorted_rank_counts = dict(sorted(Counter(ranks).items()))
+        sorted_rank_counts: Dict[Any, int] = dict(sorted(Counter(ranks).items()))
         sorted_rank_counts[f">{max_rank-1}"] = sorted_rank_counts.pop(max_rank + 1)
 
         if plot:

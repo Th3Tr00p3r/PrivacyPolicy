@@ -37,6 +37,15 @@ class IndexedFile:
             # build index file-path
             self.temp_file = NamedTemporaryFile(mode="w", delete=False)
 
+        elif self.mode == "read":
+            # prepare key -> start position dictionary
+            self.key_pos_dict = {}
+            with open(self.idx_fpath, "r") as file:
+                lines = file.readlines()
+                for line in lines:
+                    pos, key, *_ = json.loads(line)
+                    self.key_pos_dict[key] = pos
+
     def __enter__(self):
         """Doc."""
 
@@ -96,6 +105,11 @@ class IndexedFile:
             for pos in self.start_pos_list:
                 file.seek(pos)
                 yield json.loads(file.readline())
+
+    def key_to_pos_idx(self, key: str) -> int:
+        """Doc."""
+
+        return self.start_pos_list.index(self.key_pos_dict[key])
 
 
 def replace_most_common_phrase(phrases, text, special_token):
@@ -178,7 +192,6 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
             @functools.wraps(func)
             async def wrapper(*args, should_time: bool = True, **kwargs):
                 if should_time:
-                    logging.info(f"***TIMER*** Timing '{func.__name__}()'...")
                     tic = time.perf_counter()
                     value = await func(*args, **kwargs)
                     toc = time.perf_counter()
@@ -197,7 +210,6 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
             @functools.wraps(func)
             def wrapper(*args, should_time: bool = True, **kwargs):
                 if should_time:
-                    logging.info(f"***TIMER*** Timing '{func.__name__}()'...")
                     tic = time.perf_counter()
                     value = func(*args, **kwargs)
                     toc = time.perf_counter()

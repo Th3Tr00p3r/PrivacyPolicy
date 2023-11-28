@@ -1,9 +1,8 @@
 import json
 import logging
 import logging.config
-import random
 import re
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -70,13 +69,20 @@ class SampleGenerator:
     def __repr__(self):
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
 
-    def sample(self, n: int):
+    def sample(self, n: int = None, idxs: List[int] | np.ndarray = None):
         """Doc."""
+
+        start_pos_list = copy(self.start_pos_list)
+        if idxs is not None:
+            start_pos_list = [pos for idx, pos in enumerate(start_pos_list) if idx in idxs]
+        if n:
+            self.rng.shuffle(start_pos_list)
+            start_pos_list = start_pos_list[:n]
 
         return SampleGenerator(
             self.fpath,
             self.label_index_path,
-            random.sample(self.start_pos_list, n),
+            start_pos_list,
             self.shuffled,
             self.index_suffix,
             self.rng,
@@ -308,8 +314,8 @@ class CorpusProcessor:
         self,
         n_below: int = None,
         no_above: float = 0.99,
-        min_percentile: int = 5,
-        max_percentile: int = 95,
+        min_percentile: int = 1,
+        max_percentile: int = 99,
         **kwargs,
     ) -> int:
         """Doc."""
@@ -418,6 +424,7 @@ class CorpusProcessor:
     @timer(1000)
     def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
         """Doc."""
+        # TODO: this does not make sense! Why do I need a whole copy of the corpus with just the labels added? all I need is the index file. really
 
         if not force:
             # TODO: check also if file exists! if it doesn't, do the labeling even if force=False!

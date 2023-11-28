@@ -14,18 +14,24 @@
 # ---
 
 # %% [markdown]
+# ### TODO: try oversampling the known good policies - this might be a problem since I have very little labeled good policies - this might work together with pseudo-labeling using high thresholds?
 # ### TODO: Finish work on learning curves - save the train/val scores each epoch, so that they can be plotted after training to check for bias/overfitting
 # ### TODO: separate files for corpus before bigrams and before filtering? could save time trying different pre-processings
 # ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
 # ### TODO: Try feature selection
 # ### TODO: consider "pseudo-labeling" - predicting labels from model then re-training, testing each iteration.
-# ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples???
+# ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples??? - Perhaps these are the 'summary' vectors for the labels?
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: try these suggestions:
 # * Topic Modeling: Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 # * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
 
 # %%
+# import project
+import sys
+
+sys.path.append("D:/MEGA/Programming/ML/PPA/")
+
 from IPython.display import display  # type: ignore
 from winsound import Beep
 from ppa.utils import config_logging
@@ -58,7 +64,7 @@ config_logging()
 #
 # However, I only managed to get about 200 policies after a while.
 #
-# I then tried to look for publicly available databases of privacy policies, and surprisingly found a great one immediately, collected by the authors of this [paper](https://www.linkedin.com/jobs/view/3698341388/). Not only does it contain about a million policies, it also containg archived older versions of each! (which I may not need, but are nice to have). The data is available from [GitHub](https://github.com/citp/privacy-policy-historical/tree/master):
+# I then tried to look for publicly available databases of privacy policies, and surprisingly found a great one immediately, collected by the authors of this [paper](https://arxiv.org/pdf/2008.09159.pdf). Not only does it contain about a hundred-thousand policies, it also containg archived older versions of each! (which I may not need, but are nice to have). The data is available from [GitHub](https://github.com/citp/privacy-policy-historical/tree/master):
 
 # %%
 RAW_DATA_REPO_URL = "https://github.com/citp/privacy-policy-historical.git"
@@ -402,33 +408,58 @@ print(Counter(test_set.labels))
 Beep(1000, 500)
 
 # %% [markdown]
-# Train the Doc2Vec model (semi-supervised):
+# Train the Doc2Vec model (semi-supervised), and save:
 
 # %%
-from ppa.estimators import D2VClassifier  # , Doc2VecIsolationForestEstimator
+from ppa.estimators import D2VClassifier
 from ppa.utils import timer
+from datetime import datetime
 import time
 
-classifier = D2VClassifier(
-    random_state=cp.seed,
-    window=8,
-    vector_size=250,
-    epochs=15,
-    train_score=True,
-    iterative_training=True,
-    workers=psutil.cpu_count(logical=False) - 1,
-)
+# SHOULD_FIT_MODEL = True
+SHOULD_FIT_MODEL = False
 
-tic = time.perf_counter()
-logging.info("Fitting...")
-classifier.fit(train_set, train_set.labels, X_test=test_set, y_test=test_set.labels)
-logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
-classifier.score(test_set, test_set.labels)
+if SHOULD_FIT_MODEL:
+    classifier = D2VClassifier(
+        random_state=cp.seed,
+        window=5,
+        vector_size=100,
+        epochs=10,
+        train_score=True,
+        #     iterative_training=True,
+        workers=psutil.cpu_count(logical=False) - 1,
+    )
+
+    classifier.fit(train_set, train_set.labels, X_test=test_set, y_test=test_set.labels)
+    classifier.score(test_set, test_set.labels)
+
+    # save
+    dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
+    classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
+
+# %% [markdown]
+# Load existing model to estimator
 
 # %%
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-raise RuntimeError("STOP HERE!")
+from gensim.models.doc2vec import Doc2Vec
+
+if not SHOULD_FIT_MODEL:
+    classifier = D2VClassifier(
+        random_state=cp.seed,
+        window=5,
+        vector_size=100,
+        epochs=10,
+        train_score=True,
+        #     iterative_training=True,
+        workers=psutil.cpu_count(logical=False) - 1,
+    )
+
+    MODEL_DT = "27112023_154831"
+    model_fname = f"pp_d2v_{MODEL_DT}.model"
+    classifier.model = Doc2Vec.load(f"D:/MEGA/Programming/ML/PPA/ppa/models/{model_fname}")
+
+    # Beep when done
+    Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
@@ -441,7 +472,7 @@ raise RuntimeError("STOP HERE!")
 # As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
-classifier.sanity_check(train_set, plot=True)
+classifier.sanity_check(train_set, max_rank=10, plot=True)
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D
@@ -451,8 +482,8 @@ classifier.sanity_check(train_set, plot=True)
 # Infer document vectors for the test data
 # convet labeles to an array and keep only "good"/"bad" elements, and their indices
 labeled_test_tags, labeled_idxs = classifier.valid_labels(test_set.labels)
-test_set_labeled = [test_set[idx] for idx in np.nonzero(labeled_idxs)[0]]
-test_vectors_labeled = classifier.transform(test_set_labeled)
+test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_idxs)[0])
+test_vectors_labeled = classifier.transform(test_set_labeled, normalized=True)
 
 # Beep when done
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
@@ -505,11 +536,19 @@ display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
 # ## 5.3 Devising a metric
-# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly. We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies:
+# Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly. We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies, as well as for the rest of the (unlabeled) policies:
 
 # %%
-y_scores = classifier.decision_function(test_set_labeled)
+y_scores_labeled = classifier.decision_function(test_set_labeled)
+y_scores_unlabeled = classifier.decision_function(
+    test_set.sample(1_000, idxs=np.nonzero(~labeled_idxs)[0])
+)
 
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+
+# %%
 with Plotter(
     figsize=(10, 6),
     xlabel="Similarity Scores",
@@ -519,28 +558,77 @@ with Plotter(
 
     # Plot the distribution of similarity scores
     ax.hist(
-        positive_scores := y_scores[labeled_test_tags == -1],
-        bins=int(np.sqrt(positive_scores.size)),
+        good_scores := y_scores_labeled[labeled_test_tags == -1],
+        bins=int(np.sqrt(good_scores.size)),
         density=True,
-        alpha=0.7,
-        color="blue",
-        label="Positive Instances",
+        alpha=0.6,
+        label="Good",
     )
     ax.hist(
-        negative_scores := y_scores[labeled_test_tags == 1],
-        bins=int(np.sqrt(negative_scores.size)),
+        bad_scores := y_scores_labeled[labeled_test_tags == 1],
+        bins=int(np.sqrt(bad_scores.size)),
         density=True,
-        alpha=0.7,
-        color="orange",
-        label="Negative Instances",
+        alpha=0.6,
+        label="Bad",
+    )
+    ax.hist(
+        y_scores_unlabeled,
+        bins=int(np.sqrt(len(y_scores_unlabeled))),
+        density=True,
+        alpha=0.3,
+        label="Unlabeled (sample)",
+        zorder=1,
     )
 
     ax.legend()
     ax.grid(True)
 
+# %% [markdown]
+# This shows how good the model is at separating "good" policies from "bad" ones - the less overlap between the two histograms, the less errors it will make when classifying. We will, for now, score the model using balanced accuracy, using the above method to predict "good" policies for those scoring above a threshold (default 0.5). It is worth mentioning that this overlap unavoidable if there are incorrect labels or otherwise noisy data (bad preprocessing etc.)
 
 # %% [markdown]
-# This shows how good the model is at separating "good" policies from "bad" ones - the less overlap between the two histograms, the less errors it will make when classifying. We will, for now, score the model using balanced accuracy, using the above method to predict "good" policies for those scoring above a threshold (default 0.5).
+# ### 5.3.1 Investigating Specific Policies
+# In the distributions above we can see significant overlap between good/bad policies, including some which appear score far beyond their group mean. Lets try to understand why - this could be the key to devise a better model.
+
+# %% [markdown]
+# Let's get the URLs for "bad" labeled policies which have scores above `0.525`:
+
+# %%
+bad_outlier_policies = [
+    test_set[idx]
+    for idx, (label, score) in enumerate(zip(test_set_labeled.labels, y_scores_labeled))
+    if label == "bad" and score >= 0.525
+]
+
+print("Bad outlier URLs: ", [td.tags[0] for td in bad_outlier_policies])
+print("Bad outlier lengths: ", [len(td.words) for td in bad_outlier_policies])
+
+# %% [markdown]
+# # TODO: try checking out the most similar "good" policy for each? Other similarity queries from Gensim? What about the badly-scored "good" policies? The best I can hope for is wrong labels?
+
+# %%
+IDX = -1
+print(bad_outlier_policies[IDX].tags[0])
+" ".join(bad_outlier_policies[IDX].words)
+
+# %%
+list(zip(test_set_labeled.labels, y_scores_labeled))
+
+# %% [markdown]
+# ## 5.4 Considering Pseudo-Labeling
+
+# %%
+# Infer document vectors for the test data
+# convet labeles to an array and keep only "good"/"bad" elements, and their indices
+_, labeled_idxs = classifier.valid_labels(test_set.labels)
+test_set_unlabeled = [test_set[idx] for idx in np.nonzero(~labeled_idxs)[0]]
+test_vectors_labeled = classifier.transform(test_set_labeled)
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 6 Hyperparameter Search
@@ -553,9 +641,9 @@ from scipy.stats import randint, uniform
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "epochs": [1, 15],
+    "epochs": [5, 25],
     "vector_size": [150, 300],
-    "window": [8, 25],
+    "window": [5, 15],
 }
 
 N_SPLITS = 3

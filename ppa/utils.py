@@ -178,13 +178,14 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
             @functools.wraps(func)
             async def wrapper(*args, should_time: bool = True, **kwargs):
                 if should_time:
+                    logging.info(f"***TIMER*** Timing '{func.__name__}()'...")
                     tic = time.perf_counter()
                     value = await func(*args, **kwargs)
                     toc = time.perf_counter()
                     elapsed_time_ms = (toc - tic) * 1e3
                     if elapsed_time_ms > threshold_ms:
                         in_s = elapsed_time_ms > 1000
-                        print(
+                        logging.info(
                             f"***TIMER*** Function '{func.__name__}()' took {elapsed_time_ms * (1e-3 if in_s else 1):.2f} {'s' if in_s else 'ms'}.\n"
                         )
                         if beep:
@@ -196,14 +197,15 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
             @functools.wraps(func)
             def wrapper(*args, should_time: bool = True, **kwargs):
                 if should_time:
+                    logging.info(f"***TIMER*** Timing '{func.__name__}()'...")
                     tic = time.perf_counter()
                     value = func(*args, **kwargs)
                     toc = time.perf_counter()
                     elapsed_time_ms = (toc - tic) * 1e3
                     if elapsed_time_ms > threshold_ms:
                         in_s = elapsed_time_ms > 1000
-                        print(
-                            f"***TIMER*** Function '{func.__name__}()' took {elapsed_time_ms * (1e-3 if in_s else 1):.2f} {'s' if in_s else 'ms'}.\n"
+                        logging.info(
+                            f"***TIMER*** Function '{func.__name__}()' took {elapsed_time_ms * (1e-3 if in_s else 1):.2f} {'s' if in_s else 'ms'}."
                         )
                         if beep:
                             Beep(1000, 500)  # Beep at 1000 Hz for 500 ms

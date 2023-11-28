@@ -1,6 +1,7 @@
 # eric
 .eric7project/
 *.epj
+.jedi/
 
 # virtual environment
 .venv/

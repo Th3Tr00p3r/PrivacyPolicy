@@ -1,62 +1,28 @@
-# Privacy Policy Analyzer (PPA)
+# Project Privacy Analyzer (PPA)
 
-The Privacy Policy Analyzer (PPA) is an ongoing project aimed at simplifying the comprehension and assessment of privacy policies. Its goal is to provide initial labels and potentially, later on, a more comprehensive scoring system for privacy policies. Although it's designed for user empowerment, its primary aim is to ease the understanding of complex privacy policies.
+## Overview
+PPA is an ongoing project aimed at simplifying the complexities of privacy policies through Natural Language Processing (NLP) and Machine Learning techniques. The goal is to facilitate a quick assessment of privacy policies, aiding users in understanding the policies they often consent to without a thorough read. This project explores data extraction, text processing, and Doc2Vec-based classification to categorize policies as either 'good' or 'bad' in terms of their privacy content. This repository showcases various stages of the development process, from data acquisition to model evaluation.
 
-### Project Structure
-- `data/`: Stores privacy policy-related data.
-- `models/`: Contains trained models and embeddings generated from privacy policy documents.
-- `notebooks/`: Includes the "Thinking Process.py (jupytext)" notebook, highlighting the iterative development.
-- `display.py`: Manages display and visualization functions.
-- `estimators.py`: Houses the `D2VClassifier` class integrating with scikit-learn and specialized text corpus retrieval for Doc2Vec.
-- `privacy_policy_spider.py`: Module for web scraping privacy policy documents.
-- `processing.py`: Manages various data processing tasks specific to privacy policy text.
-- `utils.py`: Holds utility functions and helper methods.
-- `__init__.py`: Python package initializer.
+## Thinking Process
+The project begins with data gathering from the paper available at [Princeton's PrivacyPolicies](https://privacypolicies.cs.princeton.edu/), which provides a substantial database of privacy policies. These policies are gathered and processed, leveraging techniques in ETL (Extract, Transform, Load) to clean, tokenize, and create vector embeddings for analysis. Additionally, labels are acquired through scraping the ToS;DR API, enabling the classification of policies based on their quality.
 
-### Getting Started
-1. **Requirements:** Check `requirements.txt` for necessary dependencies.
-2. **Thinking Process Notebook:** Explore the "Thinking Process.py (jupytext)" Jupyter notebook for detailed insights into the project's development.
-3. **Early Stages:** The project is a work in progress (WIP), open to suggestions and feedback.
-4. **Contribution:** No formalized contribution process is established yet, but suggestions and ideas are highly appreciated.
-5. **License:** Distributed under the MIT License.
+## Features
+- **CorpusProcessor**: Handles text processing, tokenization, and indexing for the Doc2Vec model.
+- **SampleGenerator (IndexedFile)**: Assists in handling the training and testing data, ensuring balanced representation for model training.
+- **D2VClassifier**: Integrates with scikit-learn for hyperparameter tuning and pipeline connectivity, utilizing specialized text corpus retrieval for Doc2Vec.
 
-### CorpusProcessor and SampleGenerator
-The core classes, `CorpusProcessor` and `SampleGenerator` (alongside `IndexedFile`), handle the collection and processing of privacy policy documents. These classes facilitate data retrieval, transformation, and partitioning for further analysis and model training.
+## Directory Structure
+- `/data`: Stores acquired privacy policy documents.
+- `/models`: Contains trained models.
+- `/notebooks`: Jupyter notebooks detailing the project's various stages.
 
-### D2VClassifier
-The `D2VClassifier` class integrates with scikit-learn, enabling connectivity with hyperparameter tuning and pipeline usage. It utilizes a specialized text corpus retrieval class for Doc2Vec model training within the scikit-learn ecosystem.
+## Usage
+### Requirements
+- See `requirements.txt` for necessary dependencies.
+- Refer to the [Thinking Process.py](https://github.com/Th3Tr00p3r/PrivacyPolicy/blob/master/ppa/notebooks/Thinking%20Process.py) Jupyter notebook for a detailed walkthrough of the project's development stages.
 
-Key Features:
-- **Integration with scikit-learn:** Seamlessly integrates within scikit-learn pipelines for efficient data processing and model training workflows.
-- **Text Corpus Retrieval:** Uses a specialized mechanism for retrieving and preparing text data, optimizing it for Doc2Vec model training.
-- **Hyperparameter Tuning Support:** Provides functionalities to fine-tune Doc2Vec model parameters for improved performance.
-- **Pipeline Connectivity:** Allows direct integration into scikit-learn pipelines, enabling smooth data transformation and model training sequences.
+### Data Source
+The privacy policies used in this project are sourced from the paper available at [Princeton's PrivacyPolicies](https://privacypolicies.cs.princeton.edu/). The labels were acquired through scraping the ToS;DR API.
 
-This class serves as a bridge between scikit-learn and Doc2Vec models, simplifying the incorporation of text-based data processing and analysis, specifically tailored for privacy policies.
-
-### Thinking Process Overview
-The project initiation involves:
-
-#### 1. Data Collection and Processing
-- Scraping privacy policies from various sources.
-- Extracting, cleaning, tokenizing, and creating vector embeddings from these policies.
-
-#### 2. Preliminary Exploratory Data Analysis (EDA)
-- Understanding the distribution of policy lengths.
-- Visualizing word frequencies using `gensim` corpora.
-
-#### 3. Incorporating Labels
-- Gathering tags and ratings from the ToS;DR database.
-- Checking biases in labeled data and classifying policies as 'good' or 'bad.'
-
-#### 4. Modeling with Doc2Vec
-- Training a Doc2Vec model for document embeddings.
-- Preparing data for training and testing sets in a stratified manner.
-
-#### 5. Doc2Vec Model Evaluation
-- Evaluating the model using various methods such as similarity comparisons and visualization.
-
-#### 6. Upsampling and Pseudo-Labeling
-- Attempting upsampling and pseudo-labeling techniques to balance the data and improve model accuracy.
-
-The "Thinking Process.py (jupytext)" notebook provides a detailed narrative of the project's evolution, capturing key stages from data acquisition to model evaluation and improvement strategies.
+### License
+This project is licensed under the MIT License. See [LICENSE](https://github.com/Th3Tr00p3r/PrivacyPolicy/blob/master/LICENSE) for more details.

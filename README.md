@@ -1,4 +1,4 @@
-# Project Privacy Analyzer (PPA)
+# Privacy Policy Analyzer (PPA)
 [![Maintenance](https://img.shields.io/maintenance/yes/2023)](https://github.com/Th3Tr00p3r/PrivacyPolicy)
 [![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)
 [![Python Versions](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/)

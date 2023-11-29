@@ -27,6 +27,67 @@
 # * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
 
 # %%
+import re
+
+
+def replace_most_common_phrase(phrases, text, special_token):
+    """
+    Replace the most common phrase found in the text with a special token.
+
+    Parameters
+    ----------
+    phrases : list[str]
+        List of phrases to search for in the text.
+    text : str
+        The text in which to search for the phrases.
+    special_token : str
+        The special token to replace the most common phrase found.
+
+    Returns
+    -------
+    str
+        Text with the most common phrase replaced by the special token.
+    """
+
+    # Use a list comprehension to count occurrences of each phrase in the text
+    counts_dict = {phrase: len(re.findall(phrase, text, flags=re.IGNORECASE)) for phrase in phrases}
+
+    if any(counts_dict.values()):
+
+        # Find the maximum count
+        max_count = max(counts_dict.values())
+
+        # Filter phrases that have the maximum count
+        phrases_with_max_count = [
+            phrase for phrase, count in counts_dict.items() if count == max_count
+        ]
+
+        # If there are multiple phrases with the same maximum count
+        if len(phrases_with_max_count) > 1:
+            # Find the longest phrase among those with the same maximum count
+            longest_phrase = max(phrases_with_max_count, key=len)
+            # Replace and return the longest phrase found in the text with the special token
+            return re.sub(re.escape(longest_phrase), special_token, text, flags=re.IGNORECASE)
+
+        else:
+            # Find the phrase with the maximum count
+            phrase_to_replace = phrases_with_max_count[0]
+            # Replace and return the most common phrase found in the text with the special token
+            return re.sub(re.escape(phrase_to_replace), special_token, text, flags=re.IGNORECASE)
+
+    else:
+        return text
+
+
+phrases_to_search = ["apple", "orange", "banana", "kiwi", "pear", "grape"]
+sample_text = "I have an apple, an orange, a banana, and a banana. I also have a kiwi and a pear. The pear is delicious."
+special_token = "[FRUIT]"
+
+result = replace_most_common_phrase(phrases_to_search, sample_text, special_token)
+print(result)
+
+
+# %%
 # import project
 import sys
 
@@ -102,8 +163,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # TESTEST - use only N paths!
-N_PATHS = 100_000_000
-# N_PATHS = 10_000
+# N_PATHS = 100_000_000
+N_PATHS = 1_000
 print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
 
 # get all privacy policy markdown file paths in a (random) list
@@ -123,8 +184,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
@@ -136,11 +197,11 @@ cp = CorpusProcessor(
 )
 
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
-cp.process(
+cp.process_corpus(
     force=SHOULD_REPROCESS,
     lemmatize=True,
     should_filter_stopwords=True,
-    #     bigrams=False,
+    bigrams=True,
     n_below=None,
     no_above=1.0,
     min_percentile=1,
@@ -151,13 +212,7 @@ cp.process(
 Beep(1000, 500)
 
 # %%
-# TEST
-
-IDX = 4
-
-sg = cp.generate_samples()
-print(sg[IDX].tags, len(sg[IDX].words))
-" ".join(sg[IDX].words)
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 2. Preliminary EDA

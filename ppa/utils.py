@@ -8,7 +8,7 @@ import shutil
 import time
 from collections.abc import Iterable
 from dataclasses import InitVar, dataclass, field
-from itertools import product
+from itertools import combinations, permutations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable, List
@@ -163,6 +163,7 @@ class IndexedFile:
 def replace_most_common_phrase(phrases, text, special_token):
     """
     Replace the most common phrase found in the text with a special token.
+    If more than one phrase has same number of appearances in text, the longest is chosen to be replaced.
 
     Parameters
     ----------
@@ -181,13 +182,29 @@ def replace_most_common_phrase(phrases, text, special_token):
 
     # Use a list comprehension to count occurrences of each phrase in the text
     counts_dict = {phrase: len(re.findall(phrase, text, flags=re.IGNORECASE)) for phrase in phrases}
+
     if any(counts_dict.values()):
 
-        # Find the phrase with the maximum count
-        phrase_to_replace, max_count = max(counts_dict.items(), key=lambda item: item[1])
+        # Find the maximum count
+        max_count = max(counts_dict.values())
 
-        # Replace and return the most common phrase found in the text with the special token
-        return re.sub(phrase_to_replace, special_token, text, flags=re.IGNORECASE)
+        # Filter phrases that have the maximum count
+        phrases_with_max_count = [
+            phrase for phrase, count in counts_dict.items() if count == max_count
+        ]
+
+        # If there are multiple phrases with the same maximum count
+        if len(phrases_with_max_count) > 1:
+            # Find the longest phrase among those with the same maximum count
+            longest_phrase = max(phrases_with_max_count, key=len)
+            # Replace and return the longest phrase found in the text with the special token
+            return re.sub(re.escape(longest_phrase), special_token, text, flags=re.IGNORECASE)
+
+        else:
+            # Find the phrase with the maximum count
+            phrase_to_replace = phrases_with_max_count[0]
+            # Replace and return the most common phrase found in the text with the special token
+            return re.sub(re.escape(phrase_to_replace), special_token, text, flags=re.IGNORECASE)
 
     else:
         return text
@@ -224,7 +241,7 @@ def concatenate_nearest_neighbors(strings, n):
 
 def combine_with_separators(words, separators):
     """
-    Combine words with separators to generate all combinations.
+    Combine words with separators, allowing for omitted words while ensuring at least one word appears.
 
     Parameters
     ----------
@@ -236,18 +253,25 @@ def combine_with_separators(words, separators):
     Returns
     -------
     list[str]
-        List of combined strings with separators.
+        List of combined strings with separators and omitted words.
     """
 
-    # Generate all combinations of separators for the given number of words
-    separator_combinations = product(separators, repeat=len(words) - 1)
+    all_combinations = set()  # Using a set to ensure uniqueness
 
-    result = []
-    for sep_comb in separator_combinations:
-        combined = [f"{word}{sep}" for word, sep in zip(words, sep_comb)]
-        result.append("".join(combined + [words[-1]]))
+    # Generate all permutations of word indices to allow for omitted words
+    word_indices = range(1, len(words) + 1)  # Start from 1 to ensure at least one word
+    word_combinations = [comb for r in word_indices for comb in combinations(range(len(words)), r)]
 
-    return result
+    for word_comb in word_combinations:
+        for perm in permutations(word_comb):
+            selected_words = [words[idx] for idx in perm]
+
+            for sep in separators:
+                # Combine selected words with the current separator
+                combined = sep.join(selected_words)
+                all_combinations.add(combined)
+
+    return list(all_combinations)
 
 
 def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):

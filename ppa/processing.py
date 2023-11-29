@@ -1,6 +1,7 @@
 import json
 import logging
 import logging.config
+import pickle
 import re
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
@@ -265,7 +266,7 @@ class CorpusProcessor:
         return f"CorpusProcessor({self.total_samples:,} docs, seed={self.seed})"
 
     @timer(1000)
-    def process(
+    def process_corpus(
         self, force: bool = False, filter_tokens: bool = True, bigrams: bool = True, **kwargs
     ):
         """
@@ -284,11 +285,11 @@ class CorpusProcessor:
         if not force:
             # Try loading an existing dictionary
             self.dct = Dictionary.load(str(self.dict_path))
-            logging.info("[CorpusProcessor.process] Loaded existing dictionary.")
-            logging.info("[CorpusProcessor.process] Using existing training data.")
+            logging.info("[CorpusProcessor.process_corpus] Loaded existing dictionary.")
+            logging.info("[CorpusProcessor.process_corpus] Using existing training data.")
         else:
             logging.info(
-                f"[CorpusProcessor.process] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
+                f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
             )
             # Initialize a Dictionary object
             self.dct = Dictionary()
@@ -299,11 +300,11 @@ class CorpusProcessor:
                     if not (fidx + 1) % (self.total_samples / 10):
                         logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
                     # Open and process each file
-                    tokenized_doc = self._preprocess_document(fpath, **kwargs)
+                    tokenized_doc, domain_name = self._preprocess_document(fpath, **kwargs)
                     # Add to the dictionary
                     self.dct.add_documents([tokenized_doc])
                     # Create a TaggedDocument instance
-                    td = TaggedDocument(words=tokenized_doc, tags=[fpath.stem])
+                    td = TaggedDocument(words=tokenized_doc, tags=[domain_name])
                     # Serialize the document tokens using pickle and write to the compressed file
                     idx_output_file.write(td, notes=td.tags)
 
@@ -315,8 +316,24 @@ class CorpusProcessor:
             if filter_tokens:
                 self.total_samples -= self._filter_tokens(**kwargs)
 
-            logging.info(f"[CorpusProcessor.process] Saving Dictionary to '{self.dict_path}'. ")
-            self.dct.save(str(self.dict_path))
+            # save
+            self.save()
+
+    def process_document(self, doc: str, url: str):
+        """Process a single document based on Dictionary and FrozenPhrases objects learned form entire corpus."""
+
+        # tokenize
+        tokenized_doc, domain_name = self._preprocess_document(doc=doc, url=url)
+        # find and unite bigrams
+        tokenized_doc = self.bigram[tokenized_doc]
+        # filter according to master Dictionary
+        tokenized_doc = [
+            token_ for token_ in tokenized_doc if self.dct.token2id.get(token_) is not None
+        ]
+        # remove consecutive duplicates after filtering
+        tokenized_doc = self._remove_consecutive_duplicates(tokenized_doc)
+
+        return tokenized_doc, domain_name
 
     def _unite_bigrams(
         self,
@@ -341,16 +358,13 @@ class CorpusProcessor:
             min_count = round(n_total_tokens / n_unique_tokens)
 
         logging.info(f"[CorpusProcessor._unite_bigrams] Getting bigrams (min_count={min_count})...")
-        bigram = Phrases(
+        self.bigram = Phrases(
             self.generate_samples(text_only=True),
             min_count=min_count,
             threshold=threshold,
             scoring="npmi",
-            delimiter="",
-        )
-
-        #         self.sorted_ngrams = dict(sorted(bigram.export_phrases().items(), key=lambda item: item[1])) # TESTESTEST
-        #         print("ngrams:\n-------", "\n".join(f"{k}: {v}" for k, v in self.sorted_ngrams.items())) # TESTESTEST
+            delimiter="-",
+        ).freeze()
 
         n_unique_tokens_before = len(self.dct)
 
@@ -365,7 +379,7 @@ class CorpusProcessor:
                     logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                 # Convert the document using the `Phrases` object
-                words_with_bigrams = bigram[td.words]
+                words_with_bigrams = self.bigram[td.words]
 
                 # Add to the new dictionary
                 self.dct.add_documents([words_with_bigrams])
@@ -584,6 +598,7 @@ class CorpusProcessor:
         Tuple[SampleGenerator, SampleGenerator]
             Training and testing sample generators.
         """
+        # TODO: when using on a freshly processed CorpusProcessor without labeling but with existing old "labeled" corpus, it will use the old, which is bad
 
         if labeled:
             fpath = fpath or self.labeled_corpus_path
@@ -694,7 +709,14 @@ class CorpusProcessor:
         # Initialize and return re-generator
         return self.generate_train_test_sets(*args, test_frac=0.0, **kwargs)
 
-    def _preprocess_document(self, fpath: Path, separators=["", " ", "-"], **kwargs):
+    def _preprocess_document(
+        self,
+        fpath: Path = None,
+        doc: str = None,
+        url: str = None,
+        separators=["", " ", "-"],
+        **kwargs,
+    ):
         """
         Preprocess a document from the corpus.
 
@@ -711,10 +733,16 @@ class CorpusProcessor:
             List of preprocessed tokens.
         """
 
-        # Read all but the header
-        with open(fpath, "r", encoding="utf-8") as f:
-            _, *doc_lines = f.readlines()
-            doc = "\n".join(doc_lines)[2:]
+        if fpath:
+            with open(fpath, "r", encoding="utf-8") as f:
+                # Read all but the header
+                _, *doc_lines = f.readlines()
+                doc = "\n".join(doc_lines)[2:]
+
+        elif not doc or not url:
+            raise ValueError(
+                "Must provide either a file path or a text together with a URL (for guessing the company name)."
+            )
 
         # Replace ordinal numbers (1st, 2nd, 3rd, etc.) with their word equivalents
         ordinal_pattern = r"\b([1-9]|10)(st|nd|rd|th)\b"
@@ -751,8 +779,13 @@ class CorpusProcessor:
         doc = re.sub(url_pattern, "_urltoken_", doc)
 
         # Look for possible appearances of company name using the fpath/URL
+        if url:
+            domain_pattern = r"^(?:https?:\/\/)?(?:ftp?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)"
+            domain_name = re.match(domain_pattern, url).group(1)
+        else:
+            domain_name = fpath.name
         possible_company_words = concatenate_nearest_neighbors(
-            wordninja.split(fpath.name.split(".")[0]), 4
+            wordninja.split(domain_name.split(".")[0]), 4
         )
         possbile_company_names = combine_with_separators(possible_company_words, separators)
         doc = replace_most_common_phrase(possbile_company_names, doc, "_companynametoken_")
@@ -764,7 +797,7 @@ class CorpusProcessor:
         # Tokenize the text
         tokens = self._tokenize_text(doc, special_tokens, **kwargs)
 
-        return tokens
+        return tokens, domain_name
 
     def _tokenize_text(
         self,
@@ -874,6 +907,42 @@ class CorpusProcessor:
             "10": "tenth",
         }
         return ordinals.get(number, number)
+
+    def save(self, fname: str = "corpus_processor"):
+        """
+        Save the CorpusProcessor instance to a file using pickle.
+
+        Parameters
+        ----------
+        file_path : str or Path
+            File path where the object will be saved.
+        """
+
+        fpath = self.save_dir_path / f"{fname}.pkl"
+        with open(fpath, "wb") as output_file:
+            pickle.dump(self, output_file)
+        logging.info(f"[CorpusProcessor.save] CorpusProcessor instance saved to {fpath}")
+
+    @classmethod
+    def load(cls, file_path):
+        """
+        Load a CorpusProcessor instance from a file.
+
+        Parameters
+        ----------
+        file_path : str or Path
+            File path from which the object will be loaded.
+
+        Returns
+        -------
+        CorpusProcessor
+            Loaded CorpusProcessor instance.
+        """
+
+        with open(file_path, "rb") as file:
+            loaded_instance = pickle.load(file)
+        logging.info(f"[CorpusProcessor.load] CorpusProcessor instance loaded from {file_path}")
+        return loaded_instance
 
 
 @dataclass

@@ -31,7 +31,7 @@ class D2VClassifier(BaseEstimator):
     def __init__(
         self,
         # General
-        epochs: int,
+        epochs: int = 10,
         iterative_training=False,
         train_score: bool = False,
         random_state: int = None,
@@ -429,3 +429,42 @@ class D2VClassifier(BaseEstimator):
                 ax.bar([str(k) for k in sorted_rank_counts.keys()], sorted_rank_counts.values())
 
         return sorted_rank_counts
+
+    def save_model(self, filepath):
+        """
+        Save the trained Doc2Vec model.
+
+        Parameters
+        ----------
+        filepath : str
+            Filepath to save the model.
+        """
+
+        self.model.save(filepath)
+        logging.info(f"[D2VClassifier.save_model] Doc2Vec model successfully saved to {filepath}.")
+
+    @classmethod
+    def load_model(cls, filepath):
+        """
+        Load a trained Doc2Vec model and return an instance of the D2VClassifier.
+
+        Parameters
+        ----------
+        filepath : str
+            Filepath to load the model from.
+
+        Returns
+        -------
+        D2VClassifier
+            Instance of D2VClassifier with the loaded model.
+        """
+        instance = cls()  # Create a new instance of the class
+        instance.model = Doc2Vec.load(str(filepath))
+        logging.info(
+            f"[D2VClassifier.load_model] Doc2Vec model successfully loaded from {filepath}."
+        )
+
+        # Reset other attributes to default values
+        instance.__init__()
+
+        return instance

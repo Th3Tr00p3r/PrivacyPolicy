@@ -27,7 +27,7 @@ from ppa.utils import (
     combine_with_separators,
     concatenate_nearest_neighbors,
     get_file_index_path,
-    replace_most_common_phrase,
+    longest_most_common_phrase,
     timer,
 )
 
@@ -140,7 +140,7 @@ class SampleGenerator:
             self.text_only,
         )
 
-    def __iter__(self) -> "TaggedDocument":
+    def __iter__(self) -> TaggedDocument:
         """
         Iterate over samples in the data file.
 
@@ -150,11 +150,11 @@ class SampleGenerator:
             Yielded samples.
         """
 
-        for deserialized_obj in self.indexed_file(shuffled=self.shuffled).read_all():
+        for tokens, key, label in self.indexed_file(shuffled=self.shuffled).read_all():
             if not self.text_only:
-                yield TaggedDocument(*deserialized_obj)
+                yield TaggedDocument(tokens, ([key, label] if label is not None else [key]))
             else:
-                yield deserialized_obj[0]
+                yield tokens
 
     def __getitem__(self, pos_idx: int | slice | str) -> "TaggedDocument" | List["TaggedDocument"]:
         """
@@ -185,7 +185,10 @@ class SampleGenerator:
             if isinstance(pos_idx, str):
                 pos_idx = self.indexed_file().key_to_pos_idx(pos_idx)
             with self.indexed_file() as idx_input_file:
-                samples.append(TaggedDocument(*idx_input_file.read_idx(pos_idx)))
+                tokens, key, label = idx_input_file.read_idx(pos_idx)
+                samples.append(
+                    TaggedDocument(tokens, ([key, label] if label is not None else [key]))
+                )
 
         # if more than one sample, return as list
         if len(samples) > 1:
@@ -282,42 +285,34 @@ class CorpusProcessor:
             Toggle bigram creation, by default True.
         """
 
-        if not force:
-            # Try loading an existing dictionary
-            self.dct = Dictionary.load(str(self.dict_path))
-            logging.info("[CorpusProcessor.process_corpus] Loaded existing dictionary.")
-            logging.info("[CorpusProcessor.process_corpus] Using existing training data.")
-        else:
-            logging.info(
-                f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
-            )
-            # Initialize a Dictionary object
-            self.dct = Dictionary()
-            with IndexedFile(self.corpus_path, "write") as idx_output_file:
-                # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
-                for fidx, fpath in enumerate(self.fpaths):
-                    # Track progress visually
-                    if not (fidx + 1) % (self.total_samples / 10):
-                        logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
-                    # Open and process each file
-                    tokenized_doc, domain_name = self._preprocess_document(fpath, **kwargs)
-                    # Add to the dictionary
-                    self.dct.add_documents([tokenized_doc])
-                    # Create a TaggedDocument instance
-                    td = TaggedDocument(words=tokenized_doc, tags=[domain_name])
-                    # Serialize the document tokens using pickle and write to the compressed file
-                    idx_output_file.write(td, notes=td.tags)
+        logging.info(
+            f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
+        )
+        # Initialize a Dictionary object
+        self.dct = Dictionary()
+        with IndexedFile(self.corpus_path, "write") as corpus_file:
+            # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
+            for fidx, fpath in enumerate(self.fpaths):
+                # Track progress visually
+                if not (fidx + 1) % (self.total_samples / 10):
+                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+                # Open and process each file
+                tokenized_doc, domain_name = self._preprocess_document(fpath, **kwargs)
+                # Add to the dictionary
+                self.dct.add_documents([tokenized_doc])
+                # Serialize the document tokens using pickle and write to file
+                corpus_file.write(tokenized_doc, notes=(domain_name, None))
 
-            # process n-grams
-            if bigrams:
-                self._unite_bigrams(**kwargs)
+        # process n-grams
+        if bigrams:
+            self._unite_bigrams(**kwargs)
 
-            # filter and remove the filtered documents from the total count
-            if filter_tokens:
-                self.total_samples -= self._filter_tokens(**kwargs)
+        # filter and remove the filtered documents from the total count
+        if filter_tokens:
+            self.total_samples -= self._filter_tokens(**kwargs)
 
-            # save
-            self.save()
+        # save
+        self.save()
 
     def process_document(self, doc: str, url: str):
         """Process a single document based on Dictionary and FrozenPhrases objects learned form entire corpus."""
@@ -333,7 +328,7 @@ class CorpusProcessor:
         # remove consecutive duplicates after filtering
         tokenized_doc = self._remove_consecutive_duplicates(tokenized_doc)
 
-        return tokenized_doc, domain_name
+        return TaggedDocument(tokenized_doc, [domain_name])
 
     def _unite_bigrams(
         self,
@@ -371,7 +366,7 @@ class CorpusProcessor:
         # re-initialize the Dictionary
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._unite_bigrams] Re-processing...")
-        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+        with IndexedFile(self.corpus_path, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -379,13 +374,12 @@ class CorpusProcessor:
                     logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
 
                 # Convert the document using the `Phrases` object
-                words_with_bigrams = self.bigram[td.words]
+                bigram_tokens = self.bigram[td.words]
 
                 # Add to the new dictionary
-                self.dct.add_documents([words_with_bigrams])
-                td = TaggedDocument(words=words_with_bigrams, tags=td.tags)
+                self.dct.add_documents([bigram_tokens])
                 # Serialize the document tokens using JSON and write to file
-                idx_output_file.write(td, notes=td.tags)
+                corpus_file.write(bigram_tokens, notes=td.tags)
         logging.info(
             f"[CorpusProcessor._unite_bigrams] Unique token delta: {len(self.dct) - n_unique_tokens_before}"
         )
@@ -451,7 +445,7 @@ class CorpusProcessor:
         # re-initialize the Dictionary
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._filter_tokens] Filtering tokens and document lengths...")
-        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+        with IndexedFile(self.corpus_path, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -468,9 +462,8 @@ class CorpusProcessor:
                 if min_tokens <= len(filtered_tokens) <= max_tokens:
                     # Add to the new dictionary
                     self.dct.add_documents([filtered_tokens])
-                    td = TaggedDocument(words=filtered_tokens, tags=td.tags)
                     # Serialize the document tokens using JSON and write to file
-                    idx_output_file.write(td, notes=td.tags)
+                    corpus_file.write(filtered_tokens, notes=td.tags)
 
                 else:
                     n_docs_filtered += 1
@@ -484,7 +477,7 @@ class CorpusProcessor:
         )
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._filter_tokens] Re-filtering tokens...")
-        with IndexedFile(self.corpus_path, "write") as idx_output_file:
+        with IndexedFile(self.corpus_path, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -498,9 +491,8 @@ class CorpusProcessor:
                 filtered_tokens = self._remove_consecutive_duplicates(filtered_tokens)
                 # Add to the new dictionary
                 self.dct.add_documents([filtered_tokens])
-                td = TaggedDocument(words=filtered_tokens, tags=td.tags)
                 # Serialize the document tokens using JSON and write to file
-                idx_output_file.write(td, notes=td.tags)
+                corpus_file.write(filtered_tokens, notes=td.tags)
 
         logging.info(
             f"[CorpusProcessor._filter_tokens] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
@@ -522,45 +514,24 @@ class CorpusProcessor:
         )
 
     @timer(1000)
-    def add_label_tags(self, tag_label_dict: Dict[str, str], force=False):
+    def add_label_tags(self, key2label: Dict[str, str]):
         """
-        Add label tags to the corpus.
+        Add label tags to the index file accordin to label dictionary.
 
         Parameters
         ----------
-        tag_label_dict : Dict[str, str]
+        key2label : Dict[str, str]
             Dictionary mapping tags to labels.
-        force : bool, optional
-            Force labeling, by default False.
         """
-        # TODO: this does not make sense! Why do I need a whole copy of the corpus with just the labels added? all I need is the index file. really
 
-        if not force:
-            # TODO: check also if file exists! if it doesn't, do the labeling even if force=False!
-            logging.info("[CorpusProcessor.add_label_tags] Using existing labeled data.")
-
-        else:
-            logging.info(
-                f"[CorpusProcessor.add_label_tags] Adding labels and saving {self.total_samples:,} TaggedDocument objects to disk...",
-            )
-            with IndexedFile(self.labeled_corpus_path, "write") as idx_output_file:
-                # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-                for fidx, td in enumerate(self.generate_samples()):
-                    # Track progress visually
-                    if not (fidx + 1) % (self.total_samples / 10):
-                        logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
-
-                    # add label if available in `tag_label_dict`
-                    try:
-                        # always insert after first tag (URL)
-                        td.tags.insert(1, tag_label_dict[td.tags[0]])
-                    except KeyError:
-                        td.tags.insert(1, "unlabeled")
-
-                    # Serialize the document tokens using pickle and write to file
-                    idx_output_file.write(td, notes=td.tags)
-
-                print("Done.")
+        logging.info(
+            "[CorpusProcessor.add_label_tags] Adding labels to index file where available...",
+        )
+        with IndexedFile(self.corpus_path, "reindex") as corpus_idx_file:
+            # iterate over all existing keys (domain names)
+            for key, (pos, _) in corpus_idx_file.key2poslabel.items():
+                # "rewrite" the index line with a new label, if exists in key2label dictionary
+                corpus_idx_file.write((pos, key, key2label.get(key)))
 
     @timer(1000)
     def generate_train_test_sets(  # noqa: C901
@@ -600,10 +571,7 @@ class CorpusProcessor:
         """
         # TODO: when using on a freshly processed CorpusProcessor without labeling but with existing old "labeled" corpus, it will use the old, which is bad
 
-        if labeled:
-            fpath = fpath or self.labeled_corpus_path
-        else:
-            fpath = fpath or self.corpus_path
+        fpath = fpath or self.corpus_path
 
         file_idx_path = get_file_index_path(fpath)
 
@@ -616,6 +584,7 @@ class CorpusProcessor:
                 while True:
                     try:
                         start_pos, _, label = json.loads(idx_file.readline())
+                        label = label or "unlabeled"  # treat None as unlabeled
                         index_dict[label].append(start_pos)
                     except json.JSONDecodeError:
                         break
@@ -669,7 +638,7 @@ class CorpusProcessor:
             with open(file_idx_path, "r") as idx_file:
                 while True:
                     try:
-                        start_pos, _ = json.loads(idx_file.readline())
+                        start_pos, *_ = json.loads(idx_file.readline())
                         index_list.append(start_pos)
                     except json.JSONDecodeError:
                         break
@@ -778,18 +747,24 @@ class CorpusProcessor:
         )
         doc = re.sub(url_pattern, "_urltoken_", doc)
 
-        # Look for possible appearances of company name using the fpath/URL
+        # get domain name
         if url:
             domain_pattern = r"^(?:https?:\/\/)?(?:ftp?:\/\/)?(?:[^@\n]+@)?(?:www\.)?([^:\/\n?]+)"
             domain_name = re.match(domain_pattern, url).group(1)
         else:
-            domain_name = fpath.name
-        possible_company_words = concatenate_nearest_neighbors(
-            wordninja.split(domain_name.split(".")[0]), 4
+            domain_name = fpath.stem
+
+        # Look for possible appearances of company names using domain_name
+        sliced_domain_name = wordninja.split(domain_name.split(".")[0])
+        possible_company_words = concatenate_nearest_neighbors(sliced_domain_name, 6)
+        single_word_domain = len(sliced_domain_name) == 1
+        possbile_company_names = combine_with_separators(
+            possible_company_words, separators, min_words=1 if single_word_domain else 2
         )
-        possbile_company_names = combine_with_separators(possible_company_words, separators)
-        doc = replace_most_common_phrase(possbile_company_names, doc, "_companynametoken_")
-        special_tokens["companynametoken"] = "<COMPANY>"
+        lmc_phrase = longest_most_common_phrase(possbile_company_names, doc)
+        if lmc_phrase:
+            doc = re.sub(re.escape(lmc_phrase), "_companynametoken_", doc, flags=re.IGNORECASE)
+            special_tokens["companynametoken"] = "<COMPANY>"
 
         # remove underscores (which are caused by Markdown)
         doc = re.sub("_", " ", doc)
@@ -805,6 +780,8 @@ class CorpusProcessor:
         specials_dict: Dict[str, str],
         lemmatize: bool = True,
         filter_stopwords: bool = True,
+        keep_list: List[str] = ["not"],  # , 'but', 'if', 'and', 'or']
+        custom_stopwords: List[str] = ["ii", "llc", "inc"],
         **kwargs,
     ):
         """
@@ -848,8 +825,6 @@ class CorpusProcessor:
 
         # Remove stopwords (optional)
         if filter_stopwords:
-            keep_list = ["not"]  # , 'but', 'if', 'and', 'or']
-            custom_stopwords = ["ii"]
             stop_words = set(stopwords.words("english")) - set(keep_list) | set(custom_stopwords)
             tokens = [token for token in tokens if token not in stop_words]
 

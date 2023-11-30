@@ -13,19 +13,31 @@ The project begins with data gathering from the paper available at [Princeton's 
 - **CorpusProcessor**: Handles text processing, tokenization, and indexing for the Doc2Vec model.
 - **SampleGenerator (IndexedFile)**: Assists in handling the training and testing data, ensuring balanced representation for model training.
 - **D2VClassifier**: Integrates with scikit-learn for hyperparameter tuning and pipeline connectivity, utilizing specialized text corpus retrieval for Doc2Vec.
+- **CLI Script**: Includes a CLI script named `ppa_cli.py` for running the trained model to classify content fetched from URLs. The script should be placed within the same directory as the `ppa` package.
 
 ## Directory Structure
 - `/data`: Stores acquired privacy policy documents.
 - `/models`: Contains trained models.
 - `/notebooks`: Jupyter notebooks detailing the project's various stages.
+- `/scripts`: Contains CLI scripts for utilizing the trained models.
 
 ## Usage
 ### Requirements
 - See `requirements.txt` for necessary dependencies.
 - Refer to the [Thinking Process.py](https://github.com/Th3Tr00p3r/PrivacyPolicy/blob/master/ppa/notebooks/Thinking%20Process.py) Jupyter notebook for a detailed walkthrough of the project's development stages.
 
-### Data Source
-The privacy policies used in this project are sourced from the paper available at [Princeton's PrivacyPolicies](https://privacypolicies.cs.princeton.edu/). The labels were acquired through scraping the ToS;DR API.
+### Running the Trained Model
+The trained model can classify the content fetched from a provided URL using the CLI script. To use the script:
+
+1. Place the `ppa_cli.py` script file within the same directory as the `ppa` package.
+2. Ensure dependencies from `requirements.txt` are installed.
+3. Run the CLI script by executing the following command:
+    ```bash
+    python ppa_cli.py <URL>
+    ```
+    Replace `<URL>` with the URL you want to classify.
+
+The CLI script fetches the document text from the provided URL using [trafilatura](https://github.com/adbar/trafilatura), processes the document using a trained CorpusProcessor, and then classifies it using a loaded D2VClassifier model. The classification result (label) and score are printed to the terminal.
 
 ### License
 This project is licensed under the MIT License. See [LICENSE](https://github.com/Th3Tr00p3r/PrivacyPolicy/blob/master/LICENSE) for more details.

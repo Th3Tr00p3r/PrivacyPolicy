@@ -38,18 +38,23 @@ class IndexedFile:
 
         self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
 
-        if self.mode == "write":
+        if self.mode in {"write", "reindex"}:
             # build index file-path
             self.temp_file = NamedTemporaryFile(mode="w", delete=False)
 
-        elif self.mode == "read":
+        if self.mode in {"read", "reindex"}:
             # prepare key -> start position dictionary
-            self.key_pos_dict = {}
+            self.key2poslabel = {}
             with open(self.idx_fpath, "r") as file:
                 lines = file.readlines()
                 for line in lines:
-                    pos, key, *_ = json.loads(line)
-                    self.key_pos_dict[key] = pos
+                    pos, key, label = json.loads(line)
+                    #                    print("pos, key, label: ", pos, key, label) # TESTESTEST
+                    self.key2poslabel[key] = (pos, label)
+            # keep the reverse dict, too
+            self.pos2keylabel = {
+                pos: (key, label) for key, (pos, label) in self.key2poslabel.items()
+            }
 
     def __enter__(self):
         """
@@ -62,7 +67,7 @@ class IndexedFile:
             if self.shuffled:
                 # shuffle each time entered
                 self.rng.shuffle(self.start_pos_list)
-        elif self.mode == "write":
+        elif self.mode in {"write", "reindex"}:
             self.file = self.temp_file
             self.notes = []
 
@@ -75,16 +80,21 @@ class IndexedFile:
 
         # close the data file
         self.file.close()
+
         if self.mode == "write":
             # Move the temporary file to the supplied fpath
             shutil.move(self.temp_file.name, self.fpath)
             # create the index file from the collected lists (start positions and notes)
             with open(self.idx_fpath, "w") as idx_file:
                 for start_pos, notes in zip(self.start_pos_list, self.notes):
-                    json.dump([start_pos] + [note for note in notes], idx_file)
+                    json.dump((start_pos, *notes), idx_file)
                     idx_file.write("\n")
 
-    def write(self, obj, notes: Iterable[str]):
+        elif self.mode == "reindex":
+            # Move the temporary file to the supplied fpath
+            shutil.move(self.temp_file.name, self.idx_fpath)
+
+    def write(self, obj, notes: List[str] = None):
         """
         Write an object to the file.
 
@@ -96,14 +106,22 @@ class IndexedFile:
             Iterable containing notes for the object.
         """
 
-        if self.mode != "write":
-            raise TypeError(f"You are attempting to write while mode={self.mode}!")
+        if notes and len(notes) < 2:
+            notes.append(None)
 
-        start_pos = self.file.tell()
-        self.notes.append(notes)
-        self.start_pos_list.append(start_pos)
-        json.dump(obj, self.file)
-        self.file.write("\n")
+        if self.mode == "write":
+            start_pos = self.file.tell()
+            self.notes.append(notes)
+            self.start_pos_list.append(start_pos)
+            json.dump(obj, self.file)
+            self.file.write("\n")
+
+        elif self.mode == "reindex":
+            json.dump(obj, self.file)
+            self.file.write("\n")
+
+        else:
+            raise TypeError(f"You are attempting to write while mode={self.mode}!")
 
     def read_idx(self, pos_idx: int) -> Any:
         """
@@ -123,8 +141,11 @@ class IndexedFile:
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
-        self.file.seek(self.start_pos_list[pos_idx])
-        return json.loads(self.file.readline())
+        pos = self.start_pos_list[pos_idx]
+        self.file.seek(pos)
+        tokens = json.loads(self.file.readline())
+        key, label = self.pos2keylabel[pos]
+        return tokens, key, label
 
     def read_all(self) -> Iterable[Any]:
         """
@@ -136,12 +157,17 @@ class IndexedFile:
             Generator yielding all objects from the file.
         """
 
+        if self.mode != "read":
+            raise TypeError(f"You are attempting to read while mode={self.mode}!")
+
         if self.shuffled:
             self.rng.shuffle(self.start_pos_list)
         with open(self.fpath, "r") as file:
             for pos in self.start_pos_list:
                 file.seek(pos)
-                yield json.loads(file.readline())
+                tokens = json.loads(file.readline())
+                key, label = self.pos2keylabel[pos]
+                yield tokens, key, label
 
     def key_to_pos_idx(self, key: str) -> int:
         """
@@ -157,13 +183,13 @@ class IndexedFile:
         int
             Position index of the key in the file.
         """
-        return self.start_pos_list.index(self.key_pos_dict[key])
+        return self.start_pos_list.index(self.key2poslabel[key][0])
 
 
-def replace_most_common_phrase(phrases, text, special_token):
+def longest_most_common_phrase(phrases, text):
     """
-    Replace the most common phrase found in the text with a special token.
-    If more than one phrase has same number of appearances in text, the longest is chosen to be replaced.
+    Return the most common phrase found in the text with a special token.
+    If more than one phrase has same number of appearances in text, the longest is returned.
 
     Parameters
     ----------
@@ -177,7 +203,7 @@ def replace_most_common_phrase(phrases, text, special_token):
     Returns
     -------
     str
-        Text with the most common phrase replaced by the special token.
+        Longest of the most common phrases.
     """
 
     # Use a list comprehension to count occurrences of each phrase in the text
@@ -193,24 +219,11 @@ def replace_most_common_phrase(phrases, text, special_token):
             phrase for phrase, count in counts_dict.items() if count == max_count
         ]
 
-        # If there are multiple phrases with the same maximum count
-        if len(phrases_with_max_count) > 1:
-            # Find the longest phrase among those with the same maximum count
-            longest_phrase = max(phrases_with_max_count, key=len)
-            # Replace and return the longest phrase found in the text with the special token
-            return re.sub(re.escape(longest_phrase), special_token, text, flags=re.IGNORECASE)
-
-        else:
-            # Find the phrase with the maximum count
-            phrase_to_replace = phrases_with_max_count[0]
-            # Replace and return the most common phrase found in the text with the special token
-            return re.sub(re.escape(phrase_to_replace), special_token, text, flags=re.IGNORECASE)
-
-    else:
-        return text
+        # Return the longest phrase among those with the same maximum count
+        return max(phrases_with_max_count, key=len)
 
 
-def concatenate_nearest_neighbors(strings, n):
+def concatenate_nearest_neighbors(strings, n_max: int) -> List[str]:
     """
     Concatenate nearest neighbors from a list of strings.
 
@@ -227,7 +240,7 @@ def concatenate_nearest_neighbors(strings, n):
         List of strings after concatenation of nearest neighbors.
     """
 
-    while len(strings) > n:
+    while len(strings) > n_max:
         # Calculate distances (you might use a specific method based on your criteria)
         # For this example, let's randomly select neighbors to concatenate
         idx = random.randint(0, len(strings) - 2)
@@ -239,7 +252,7 @@ def concatenate_nearest_neighbors(strings, n):
     return strings
 
 
-def combine_with_separators(words, separators):
+def combine_with_separators(words, separators, min_length=4, min_words: int = 1):
     """
     Combine words with separators, allowing for omitted words while ensuring at least one word appears.
 
@@ -259,8 +272,12 @@ def combine_with_separators(words, separators):
     all_combinations = set()  # Using a set to ensure uniqueness
 
     # Generate all permutations of word indices to allow for omitted words
-    word_indices = range(1, len(words) + 1)  # Start from 1 to ensure at least one word
-    word_combinations = [comb for r in word_indices for comb in combinations(range(len(words)), r)]
+    word_idxs = range(
+        min_words, len(words) + 1
+    )  # Start from 'min_words' to ensure at least 'min_words' words
+    word_combinations = [
+        comb for word_idx in word_idxs for comb in combinations(range(len(words)), word_idx)
+    ]
 
     for word_comb in word_combinations:
         for perm in permutations(word_comb):
@@ -269,7 +286,9 @@ def combine_with_separators(words, separators):
             for sep in separators:
                 # Combine selected words with the current separator
                 combined = sep.join(selected_words)
-                all_combinations.add(combined)
+                # enforce minimum length
+                if len(combined) >= min_length:
+                    all_combinations.add(combined)
 
     return list(all_combinations)
 

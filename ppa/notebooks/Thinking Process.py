@@ -15,7 +15,6 @@
 
 # %% [markdown]
 # ### TODO: try oversampling the known good policies - this might be a problem since I have very little labeled good policies - this might work together with pseudo-labeling using high thresholds?
-# ### TODO: Finish work on learning curves - save the train/val scores each epoch, so that they can be plotted after training to check for bias/overfitting
 # ### TODO: separate files for corpus before bigrams and before filtering? could save time trying different pre-processings
 # ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
 # ### TODO: Try feature selection
@@ -25,67 +24,6 @@
 # ### TODO: try these suggestions:
 # * Topic Modeling: Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 # * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
-
-# %%
-import re
-
-
-def replace_most_common_phrase(phrases, text, special_token):
-    """
-    Replace the most common phrase found in the text with a special token.
-
-    Parameters
-    ----------
-    phrases : list[str]
-        List of phrases to search for in the text.
-    text : str
-        The text in which to search for the phrases.
-    special_token : str
-        The special token to replace the most common phrase found.
-
-    Returns
-    -------
-    str
-        Text with the most common phrase replaced by the special token.
-    """
-
-    # Use a list comprehension to count occurrences of each phrase in the text
-    counts_dict = {phrase: len(re.findall(phrase, text, flags=re.IGNORECASE)) for phrase in phrases}
-
-    if any(counts_dict.values()):
-
-        # Find the maximum count
-        max_count = max(counts_dict.values())
-
-        # Filter phrases that have the maximum count
-        phrases_with_max_count = [
-            phrase for phrase, count in counts_dict.items() if count == max_count
-        ]
-
-        # If there are multiple phrases with the same maximum count
-        if len(phrases_with_max_count) > 1:
-            # Find the longest phrase among those with the same maximum count
-            longest_phrase = max(phrases_with_max_count, key=len)
-            # Replace and return the longest phrase found in the text with the special token
-            return re.sub(re.escape(longest_phrase), special_token, text, flags=re.IGNORECASE)
-
-        else:
-            # Find the phrase with the maximum count
-            phrase_to_replace = phrases_with_max_count[0]
-            # Replace and return the most common phrase found in the text with the special token
-            return re.sub(re.escape(phrase_to_replace), special_token, text, flags=re.IGNORECASE)
-
-    else:
-        return text
-
-
-phrases_to_search = ["apple", "orange", "banana", "kiwi", "pear", "grape"]
-sample_text = "I have an apple, an orange, a banana, and a banana. I also have a kiwi and a pear. The pear is delicious."
-special_token = "[FRUIT]"
-
-result = replace_most_common_phrase(phrases_to_search, sample_text, special_token)
-print(result)
-
 
 # %%
 # import project
@@ -163,8 +101,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # TESTEST - use only N paths!
-# N_PATHS = 100_000_000
-N_PATHS = 1_000
+N_PATHS = 100_000_000
+# N_PATHS = 2_000
 print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
 
 # get all privacy policy markdown file paths in a (random) list
@@ -189,30 +127,28 @@ SHOULD_REPROCESS = True
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
-# create a document processor with the paths
-cp = CorpusProcessor(
-    policy_paths,
-    MODEL_DIR_PATH,
-    seed=SEED,
-)
-
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
-cp.process_corpus(
-    force=SHOULD_REPROCESS,
-    lemmatize=True,
-    should_filter_stopwords=True,
-    bigrams=True,
-    n_below=None,
-    no_above=1.0,
-    min_percentile=1,
-    max_percentile=99,
-    threshold=0.5,
-)
+if SHOULD_REPROCESS:
+    # create a document processor with the paths
+    cp = CorpusProcessor(
+        policy_paths,
+        MODEL_DIR_PATH,
+        seed=SEED,
+    )
+    cp.process_corpus(
+        lemmatize=True,
+        should_filter_stopwords=True,
+        bigrams=True,
+        n_below=None,
+        no_above=1.0,
+        min_percentile=1,
+        max_percentile=99,
+        threshold=0.5,
+    )
+else:
+    cp = CorpusProcessor.load(MODEL_DIR_PATH / "corpus_processor.pkl")
 
 Beep(1000, 500)
-
-# %%
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 2. Preliminary EDA
@@ -305,7 +241,12 @@ display_wordcloud(filtered_dct, per_doc=True)
 # %% [markdown]
 # # 3. Aqcuiring and incorporating labels
 # ## 3.1 ETL for Policy Ratings
-# Getting all tags, for searching the ToS;DR database
+# In order to acquire labels for the policies, turned to the only source I could found which had bulk amounts of ratings for privacy policies was [ToS;DR](https://tosdr.org/) - actually, ToS;DR provides a community-effort-driven database of combined rating for privacy policy AND terms of service, which I assumed would be similar to just the privacy policy rating. The labeling process was as follows:
+# 1) Gather domain names from all available policy file-paths
+# 2) Use the [ToS;DR search API](https://api.tosdr.org/search/v4/?query=google.com) to get a letter score - 'A' (best) to 'E' (worst) for all rated policies (regretably, only around 1% had ratings)
+# 3) To simplify, ratings 'A' or 'B' were labeled 'good', the rest ('C', 'D' and 'E') were labeled 'bad'
+# 4) The labels are kept in an index file, where each row contains a file start position (index), a domain name and a label
+# 5) The index file is used to add secondary tags to the `TaggedDocument` objects provided to Doc2Vec during training, and for synchronizing between policies and their labels during scoring of the model.
 
 # %%
 from itertools import chain
@@ -362,9 +303,6 @@ print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
 
 ratings_df.sample(10)
 
-# %%
-ratings_df
-
 # %% [markdown]
 # ## 3.2 Checking for Bias in Labeled Data
 
@@ -404,11 +342,12 @@ with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
 # Finally, let's update the corpus with labeled data, and save it separately:
 
 # %%
-# SHOULD_FORCE_LABELING = True
-SHOULD_FORCE_LABELING = False
+SHOULD_FORCE_LABELING = True
+# SHOULD_FORCE_LABELING = False
 
-url_label_dict = ratings_df.set_index("tag")["label"].to_dict()
-cp.add_label_tags(url_label_dict, force=SHOULD_FORCE_LABELING)
+if SHOULD_FORCE_LABELING:
+    url2label = ratings_df.set_index("tag")["label"].to_dict()
+    cp.add_label_tags(url2label)
 
 # %% [markdown]
 # # 4. Modeling
@@ -447,8 +386,8 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-# SHOULD_FIT_MODEL = True
-SHOULD_FIT_MODEL = False
+SHOULD_FIT_MODEL = True
+# SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
     # initialize classifier
@@ -471,6 +410,9 @@ if SHOULD_FIT_MODEL:
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
     classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
+
+# %%
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Load existing model to estimator

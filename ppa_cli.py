@@ -2,7 +2,6 @@ from pathlib import Path
 
 import trafilatura
 import typer
-from gensim.models.doc2vec import TaggedDocument
 
 from ppa.estimators import D2VClassifier
 from ppa.processing import CorpusProcessor
@@ -35,8 +34,7 @@ def classify_url(url: str):
     doc_text = trafilatura.extract(trafilatura.fetch_url(url))
 
     # process the document using the "trained" CorpusProcessor
-    words, tag = processor.process_document(doc_text, url=url)
-    td = TaggedDocument(words, [tag])
+    td = processor.process_document(doc_text, url=url)
 
     # classify using D2VClassifier
     label, score = classifier.predict([td], get_scores=True)

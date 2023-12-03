@@ -44,8 +44,6 @@ class SampleGenerator:
     ----------
     fpath : Path
         Path to the data file.
-    label_index_path : Path
-        Path to the label index file.
     start_pos_list : List[int]
         List of starting positions in the file for sampling.
     shuffled : bool, optional
@@ -59,7 +57,6 @@ class SampleGenerator:
     """
 
     fpath: Path
-    label_index_path: Path
     start_pos_list: List[int]
     shuffled: bool = False
     index_suffix: str = "_idx"
@@ -132,7 +129,6 @@ class SampleGenerator:
 
         return SampleGenerator(
             self.fpath,
-            self.label_index_path,
             start_pos_list,
             self.shuffled,
             self.index_suffix,
@@ -196,6 +192,11 @@ class SampleGenerator:
         else:
             return samples[0]
 
+    def index(self, key) -> int:
+        """Get index of key"""
+
+        return self.indexed_file().key_to_pos_idx(key)
+
     def __len__(self) -> int:
         """
         Return the number of samples in SampleGenerator.
@@ -224,14 +225,13 @@ class SampleGenerator:
             List of labels.
         """
 
-        urls = [td.tags[0] for td in self]
-        url_label_dict = {}
-        with open(self.label_index_path, "r") as label_idx_file:
+        pos2label = {}
+        with open(self.indexed_file().idx_fpath, "r") as label_idx_file:
             for line in label_idx_file:
-                _, url, label = json.loads(line.strip())
-                url_label_dict[url] = label
+                pos, _, label = json.loads(line.strip())
+                pos2label[pos] = label
 
-        self._labels = [url_label_dict[url] for url in urls]
+        self._labels = [pos2label[pos] for pos in self.start_pos_list]
         return self._labels
 
 
@@ -256,7 +256,6 @@ class CorpusProcessor:
         # file paths:
         self.dict_path = self.save_dir_path / "dictionary.pkl"
         self.corpus_path = self.save_dir_path / "corpus.json"
-        self.labeled_corpus_path = self.save_dir_path / "labeled_corpus.json"
 
         # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
         self.rng = np.random.default_rng(self.seed)
@@ -286,7 +285,7 @@ class CorpusProcessor:
         """
 
         logging.info(
-            f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and saving TaggedDocument objects to disk..."
+            f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and serializing to disk..."
         )
         # Initialize a Dictionary object
         self.dct = Dictionary()
@@ -332,7 +331,7 @@ class CorpusProcessor:
 
     def _unite_bigrams(
         self,
-        threshold: float = 0.1,
+        bigram_threshold: float = 0.1,
         min_count: int = None,
         **kwargs,
     ) -> None:
@@ -341,7 +340,7 @@ class CorpusProcessor:
 
         Parameters
         ----------
-        threshold : float, optional
+        bigram_threshold : float, optional
             Threshold for bigram detection, by default 0.1.
         min_count : int, optional
             Minimum count for bigram creation, by default None.
@@ -356,7 +355,7 @@ class CorpusProcessor:
         self.bigram = Phrases(
             self.generate_samples(text_only=True),
             min_count=min_count,
-            threshold=threshold,
+            threshold=bigram_threshold,
             scoring="npmi",
             delimiter="-",
         ).freeze()
@@ -386,7 +385,7 @@ class CorpusProcessor:
 
     def _filter_tokens(
         self,
-        n_below: int = None,
+        n_below: int = 10,
         no_above: float = 0.99,
         min_percentile: int = 1,
         max_percentile: int = 99,
@@ -425,9 +424,7 @@ class CorpusProcessor:
         logging.info(
             f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
         )
-
-        # If not supplied, estimate the number of document appearaces below which tokens are ignored to 0.1% of the documents)
-        n_below = n_below or round(self.dct.num_docs / 1000)
+        n_below = n_below or round(self.dct.num_docs ** (1 / 3))
         logging.info(
             f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
         )
@@ -543,6 +540,7 @@ class CorpusProcessor:
         shuffled_gen=False,
         n_samples: int = None,
         text_only: bool = False,
+        upsampling: bool = False,  # TESTESTEST
     ):
         """
         Generate training and testing sets from the corpus.
@@ -569,7 +567,6 @@ class CorpusProcessor:
         Tuple[SampleGenerator, SampleGenerator]
             Training and testing sample generators.
         """
-        # TODO: when using on a freshly processed CorpusProcessor without labeling but with existing old "labeled" corpus, it will use the old, which is bad
 
         fpath = fpath or self.corpus_path
 
@@ -596,13 +593,15 @@ class CorpusProcessor:
 
             # Count the number of "good," "bad," and "unlabeled" policies in training set (stratified)
             label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+            upsampling_factor = int(label_counts_dict["bad"] / label_counts_dict["good"])
 
             # trim each list according to the requested number of samples and its own length
             if n_samples < self.total_samples:
                 sample_frac = n_samples / self.total_samples
                 for label in index_dict.keys():
-                    n_reduced = int(label_counts_dict[label] * sample_frac)
-                    index_dict[label] = index_dict[label][:n_reduced]
+                    if not (upsampling and label == "good"):  # TESTESTEST
+                        n_reduced = int(label_counts_dict[label] * sample_frac)
+                        index_dict[label] = index_dict[label][:n_reduced]
 
                 # Recount needed after trimming
                 label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
@@ -616,13 +615,23 @@ class CorpusProcessor:
                 n_test_bad = int(label_counts_dict["bad"] * test_frac)
                 n_test_unlabeled = int(label_counts_dict["unlabeled"] * test_frac)
 
-                # Collect training set file index
+                # Collect test set file index
                 for _ in range(n_test_good):
                     test_start_positions.append(index_dict["good"].pop())
                 for _ in range(n_test_bad):
                     test_start_positions.append(index_dict["bad"].pop())
                 for _ in range(n_test_unlabeled):
                     test_start_positions.append(index_dict["unlabeled"].pop())
+
+            # oversample minority class (optional) # TESTESTEST
+            if upsampling:
+                index_dict["good"] *= upsampling_factor
+                self.rng.shuffle(index_dict["good"])
+
+                # trim good list AFTER upsampling (if relevant)
+                if n_samples < self.total_samples:
+                    n_reduced = int(len(index_dict["good"]) * sample_frac)
+                    index_dict["good"] = index_dict["good"][:n_reduced]
 
             # use the rest as training set file index
             train_start_positions = index_dict["good"] + index_dict["bad"] + index_dict["unlabeled"]
@@ -653,11 +662,9 @@ class CorpusProcessor:
             test_start_positions = index_list[n_train:n_samples]
 
         # Initialize re-generators
-        label_index_path = get_file_index_path(self.labeled_corpus_path)
         if not test_start_positions:
             return SampleGenerator(
                 fpath,
-                label_index_path,
                 train_start_positions,
                 shuffled=shuffled_gen,
                 text_only=text_only,
@@ -665,10 +672,9 @@ class CorpusProcessor:
         else:
             return SampleGenerator(
                 fpath,
-                label_index_path,
                 train_start_positions,
                 shuffled=shuffled_gen,
-            ), SampleGenerator(fpath, label_index_path, test_start_positions, shuffled=shuffled_gen)
+            ), SampleGenerator(fpath, test_start_positions, shuffled=shuffled_gen)
 
     def generate_samples(self, *args, **kwargs):
         """
@@ -818,7 +824,7 @@ class CorpusProcessor:
             # Initialize the WordNet lemmatizer
             lemmatizer = WordNetLemmatizer()
             # Lemmatize the tokens
-            tokens = [lemmatizer.lemmatize(token) for token in tokens]
+            tokens = [lemmatizer.lemmatize(token_) for token_ in tokens]
 
         # TODO: Privacy terms / highlighting should be performed here!
         # (before stopwords are removed, which might ruint things such as 'opt out/in')
@@ -826,7 +832,7 @@ class CorpusProcessor:
         # Remove stopwords (optional)
         if filter_stopwords:
             stop_words = set(stopwords.words("english")) - set(keep_list) | set(custom_stopwords)
-            tokens = [token for token in tokens if token not in stop_words]
+            tokens = [token_ for token_ in tokens if token_ not in stop_words]
 
         # Remove consecutive duplicates
         tokens = self._remove_consecutive_duplicates(tokens)

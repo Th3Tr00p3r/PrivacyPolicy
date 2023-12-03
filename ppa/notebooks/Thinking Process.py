@@ -14,16 +14,10 @@
 # ---
 
 # %% [markdown]
-# ### TODO: try oversampling the known good policies - this might be a problem since I have very little labeled good policies - this might work together with pseudo-labeling using high thresholds?
-# ### TODO: separate files for corpus before bigrams and before filtering? could save time trying different pre-processings
-# ### TODO: Rethink online training - perhaps the Doc2Vec should train alone for a few epochs before beginning training on the IsolationForest? Perhaps also a more linear increase in n_estimators is more appropriate for the forest. Another option - perhaps the number of trees trained each epoch should accelarate instead of deaccelarating? i.e. keep the Doc2Vec epochs as is but flip the n_estimators increments?
-# ### TODO: Try feature selection
-# ### TODO: consider "pseudo-labeling" - predicting labels from model then re-training, testing each iteration.
-# ### TODO: Figure out why there seems to be a few more vectors in the model.dv then there are training samples??? - Perhaps these are the 'summary' vectors for the labels?
+# ### TODO: try xgboost classification on the inferred training vectors (with feature selection) - I could use just D2VTransformer (Gensim) for this, attaching it to xgboost with sklearn in a pipeline
+# ### TODO: Compare calculating good/bad mean vectors according to model vectors vs. according to inferred vectors. Then, try training a single-tag ('unsupervised') Doc2Vec model, scoring according to inferred good/bad training labels (instead of the now non-existant good/bad model vectors) - is it better?
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
-# ### TODO: try these suggestions:
-# * Topic Modeling: Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
-# * Named Entity Recognition (NER): If applicable, perform NER to extract entities like names, organizations, locations, and dates from the text. Explore the frequency and distribution of entities in the documents.
+# ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 
 # %%
 # import project
@@ -100,20 +94,23 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 # %%
 import random
 
-# TESTEST - use only N paths!
+# limit number of policies in corpus
 N_PATHS = 100_000_000
-# N_PATHS = 2_000
-print(f"\nWARNING! LIMITING TO {N_PATHS:,} PATHS!")
+# N_PATHS = 10_000
 
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
 all_policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
 SEED = 42
 rng = np.random.default_rng(seed=SEED)
+print("Shuffling... ", end="")
 rng.shuffle(all_policy_paths)
 
 # get `N_PATHS` random policy paths
-policy_paths = [fpath for idx, fpath in enumerate(all_policy_paths) if idx < N_PATHS]
+print(f"Keeping first {N_PATHS:,}... ", end="")
+policy_paths = all_policy_paths[:N_PATHS]
+print("Re-shuffling...")
+rng.shuffle(all_policy_paths)
 print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy files.")
 
 # %% [markdown]
@@ -122,8 +119,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
@@ -139,11 +136,11 @@ if SHOULD_REPROCESS:
         lemmatize=True,
         should_filter_stopwords=True,
         bigrams=True,
+        bigram_threshold=0.5,
         n_below=None,
         no_above=1.0,
         min_percentile=1,
         max_percentile=99,
-        threshold=0.5,
     )
 else:
     cp = CorpusProcessor.load(MODEL_DIR_PATH / "corpus_processor.pkl")
@@ -166,8 +163,10 @@ pp_lengths = np.array(
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
 
-with Plotter() as ax:
-    ax.hist(pp_lengths, int(np.sqrt(pp_lengths.size)))
+with Plotter(
+    suptitle="Policy Length Histogram", xlabel="Length (tokens)", ylabel="Bin Count"
+) as ax:
+    ax.hist(pp_lengths, bins=int(np.sqrt(pp_lengths.size)))
 
 print(f"PP length range: {pp_lengths.min()} - {pp_lengths.max():,} tokens")
 print(f"median PP length: {np.median(pp_lengths):,.0f} tokens")
@@ -179,26 +178,43 @@ print(f"median PP length: {np.median(pp_lengths):,.0f} tokens")
 cp.dict_info()
 
 # %% [markdown]
-# We can use it to visualize the data a bit.
-#
-# First, let's visualize the most frequent words in the entire corpus as a word-cloud:
+# First, let's plot a histogram of the most frequent tokens in each document. For a robustly varied corpus, I would expect a long-tailed distribution of per-doc appearances for the most common tokens. If the distribution decays to quickly, most tokens would effectively be just noise, and the corpus could be too simple.
+
+# %%
+token_ids = np.array(list(cp.dct.dfs.keys()))
+doc_freqs = np.array(list(cp.dct.dfs.values()))
+
+# sort according to frequencies in descending order
+sorted_idxs = np.argsort(doc_freqs)[::-1]
+token_ids = token_ids[sorted_idxs]
+doc_freqs = doc_freqs[sorted_idxs]
+
+# limit to `LIMIT_ID` most common
+LIMIT_ID = len(cp.dct) // 5
+token_ids = token_ids[:LIMIT_ID]
+doc_freqs = doc_freqs[:LIMIT_ID]
+
+with Plotter(
+    suptitle=f"Document Counts\nof {LIMIT_ID:,} Most Common Tokens",
+    xlabel="Token Rank (most common is 0)",
+    ylabel="Token Per-Doc. Counts",
+) as ax:
+    ax.bar(token_ids, doc_freqs)
+
+# %% [markdown]
+# Now, let's visualize the most frequent words in the entire corpus as a word-cloud, as well as those in more frequent per document:
 
 # %%
 from ppa.display import display_wordcloud
 
-# display the word frequencies as a word-cloud
 print("Total Frequency Word-Cloud:")
 display_wordcloud(cp.dct)
 
-# %% [markdown]
-# Now, let's also visualize the most frequent words document-wise:
-
-# %%
 print("Document Frequency Word-Cloud:")
 display_wordcloud(cp.dct, per_doc=True)
 
 # %% [markdown]
-# Notice how the images are quite similar.
+# Notice how the images are quite similar - this is expected since the whole corpus is comprised of the same type of documents (privacy policies).
 #
 # We can try filtering out the least common and most common words from the Dictionary - words like "privacy", "information" or "data" are present in almost all PPs, and are probably not good differentiators between them.
 
@@ -339,13 +355,10 @@ with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
 
 # %% [markdown]
-# Finally, let's update the corpus with labeled data, and save it separately:
+# Finally, let's update the data index file with labels for URLs which have them:
 
 # %%
-SHOULD_FORCE_LABELING = True
-# SHOULD_FORCE_LABELING = False
-
-if SHOULD_FORCE_LABELING:
+if SHOULD_REPROCESS:
     url2label = ratings_df.set_index("tag")["label"].to_dict()
     cp.add_label_tags(url2label)
 
@@ -370,12 +383,17 @@ train_set, test_set = cp.generate_train_test_sets(
     test_frac=TEST_FRAC,
     labeled=True,
     shuffled_idx=True,
+    #     upsampling=True,
 )
 
 print(Counter(train_set.labels))
 print(Counter(test_set.labels))
 
 Beep(1000, 500)
+
+# %%
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Train the Doc2Vec model (semi-supervised), and save:
@@ -392,11 +410,12 @@ SHOULD_FIT_MODEL = True
 if SHOULD_FIT_MODEL:
     # initialize classifier
     classifier = D2VClassifier(
-        random_state=cp.seed,
-        window=5,
-        vector_size=100,
         epochs=10,
+        vector_size=84,  # 84?
+        window=5,
+        negative=20,
         train_score=True,
+        random_state=cp.seed,
         #     iterative_training=True,
         workers=psutil.cpu_count(logical=False) - 1,
     )
@@ -411,9 +430,6 @@ if SHOULD_FIT_MODEL:
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
     classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
 
-# %%
-raise RuntimeError("STOP HERE!")
-
 # %% [markdown]
 # Load existing model to estimator
 
@@ -423,16 +439,9 @@ from gensim.models.doc2vec import Doc2Vec
 if not SHOULD_FIT_MODEL:
     classifier = D2VClassifier(
         random_state=cp.seed,
-        window=5,
-        vector_size=100,
-        epochs=10,
-        train_score=True,
-        #     iterative_training=True,
-        workers=psutil.cpu_count(logical=False) - 1,
     )
 
-    MODEL_DT = "27112023_154831"
-    model_fname = f"pp_d2v_{MODEL_DT}.model"
+    model_fname = f"pp_d2v.model"
     classifier.model = Doc2Vec.load(f"D:/MEGA/Programming/ML/PPA/ppa/models/{model_fname}")
 
     # score the model
@@ -496,7 +505,7 @@ from sklearn.manifold import TSNE
 
 tsne = TSNE(
     n_components=2,
-    perplexity=1,
+    perplexity=20,
     learning_rate=200,
     n_iter=1000,
     n_iter_without_progress=500,
@@ -630,11 +639,106 @@ with Plotter(
 # %%
 df[df["label"] == "good"].sort_values(by="score")
 
-# %%
-" ".join(test_set["vpl.ca"].words)
-
 # %% [markdown]
 # Since I recognize some of the URLs as having legitimately "good" privacy policies, and the worst scored one is that of Vancouver's public library, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
+
+# %% [markdown]
+# # 6 Optimization
+# # 6.1 Cross-Validation
+
+# %%
+from sklearn.model_selection import cross_validate
+
+CV = 4
+
+tic = time.perf_counter()
+logging.info("Starting CV...")
+scores = cross_validate(
+    D2VClassifier(
+        epochs=10,
+        vector_size=84,
+        window=5,
+        negative=20,
+        random_state=cp.seed,
+    ),
+    train_set,
+    train_set.labels,
+    cv=CV,
+    return_train_score=True,
+    verbose=1,
+    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+)
+logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+scores_df = pd.DataFrame(scores)
+display(scores_df)
+
+# %% [markdown]
+# ## 6.2 Hyperparameter Search
+# Perform search to find best set of hyperparameters
+
+# %%
+from sklearn.experimental import enable_halving_search_cv  # noqa
+from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
+from scipy.stats import randint, uniform
+
+# Create a larger parameter grid with more combinations
+param_dist = {
+    "epochs": [10],
+    "vector_size": [74, 100, 154],
+    "window": [5, 7, 9],
+    "negative": [5, 10, 20],
+}
+
+N_SPLITS = 3
+HRS_SEED = randint(0, 2**32).rvs()
+
+# Update the hyperparameter search to use the pipeline
+search = GridSearchCV(
+    estimator=D2VClassifier(
+        random_state=cp.seed,
+        workers=psutil.cpu_count(logical=False) - 1,
+    ),
+    #     param_distributions=param_dist,
+    param_grid=param_dist,
+    #     n_candidates="exhaust",
+    verbose=1,
+    #     random_state=HRS_SEED,
+    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
+    #     min_resources=15000,
+    #     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+    refit=False,
+)
+
+# Fit the hyperparameter search on your training data
+tic = time.perf_counter()
+logging.info("Starting search...")
+search.fit(train_set, train_set.labels)
+logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+# Print the best hyperparameters
+logging.info(f"Best Hyperparameters: {search.best_params_}")
+
+# display the entire CV results, too
+display(pd.DataFrame(search.cv_results_))
+
+# Beep when search is done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# Refit the model using the best found hyperparameters, with multiprocessing
+best_model = D2VClassifier(
+    **search.best_params_,
+    random_state=cp.seed,
+    workers=psutil.cpu_count(logical=False) - 1,
+)
+best_model.fit(train_set, train_set.labels)
+
+# Get the score of the best model on the test set
+best_model_score = best_model.score(test_set, test_set.labels)
+logging.info("Best Model Score:", best_model_score)
+
+# Beep again when best model is ready
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # # 6 Considering Upsampling and Pseudo-Labeling
@@ -642,6 +746,8 @@ df[df["label"] == "good"].sort_values(by="score")
 # Being unable to increase my model's balanced-accuracy metric above about 0.8 using hyperparameter tuning or better data pre-processing (I have tinkered with both for a while now). What could be the reason is the imbalance existing in the data - there are about 17 times more "bad" labels than "good" ones, and I expect about the same imbalance in the unlabeled corpus. I can attempt to improve the data in two (possibly combined) methods:
 # * **Upsampling (mixing-in copies of) "good"-labeled policies in the training data**: This might make the model 'understand' "good" policies better, as the data will be less biased (need to watch for overfitting of the "good" policies)
 # * **Pseudo-labeling unlabeled training data using high/low thresholds for prediction**: This would make the scoring more robust as model summary vectors (specifically the "good" one) are averaged over more samples, enabling finer tuning according to score. This could also potentially enable supervised classification later on.
+#
+# If upsampling appears to be improving the metric, I could iteratively label more polcies (good & bad) and upsample further, as long as things keep improving.
 
 # %% [markdown]
 # ## 6.1 Pseudo-Labeling
@@ -780,132 +886,6 @@ print("Potential 'bad' pseudo-labels: ", sum(y_train_scores_unlabeled < THRESH_B
 # ## 6.2 Upsampling
 # Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have (NOT YET) added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set:
 # # TODO: IMPLEMENT UPSAMPLING
-
-# %%
-raise RuntimeError("STOP HERE!")
-
-# %% [markdown]
-# # 6 Hyperparameter Search
-# Perform search to find best set of hyperparametes
-
-# %%
-from sklearn.experimental import enable_halving_search_cv  # noqa
-from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
-from scipy.stats import randint, uniform
-
-# Create a larger parameter grid with more combinations
-param_dist = {
-    "epochs": [5, 25],
-    "vector_size": [150, 300],
-    "window": [5, 15],
-}
-
-N_SPLITS = 3
-HRS_SEED = randint(0, 2**32).rvs()
-
-# Update the hyperparameter search to use the pipeline
-search = GridSearchCV(
-    estimator=D2VClassifier(
-        random_state=cp.seed,
-        epochs=5,
-    ),
-    #     param_distributions=param_dist,
-    param_grid=param_dist,
-    #     n_candidates="exhaust",
-    verbose=1,
-    #     random_state=HRS_SEED,
-    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
-    #     min_resources=15000,
-    n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
-    refit=False,
-)
-
-# # Update the hyperparameter search to use the pipeline
-# search = HalvingRandomSearchCV(
-#     classifier=Doc2VecIsolationForestEstimator(
-#         random_state=cp.seed,
-#         onlne_learning=True,
-#         epochs=5,
-#         #         n_jobs=1,
-#         #         workers=1,
-#         metric="bal_acc",
-#     ),
-#     param_distributions=param_dist,
-#     n_candidates="exhaust",
-#     verbose=1,
-#     random_state=cp.seed,
-#     cv=StratifiedKFold(n_splits=3, shuffle=True, random_state=cp.seed),
-#     min_resources=15000,
-#     #     n_jobs = psutil.cpu_count(logical=False) - 1,
-# )
-
-# Fit the hyperparameter search on your training data
-tic = time.perf_counter()
-logging.info("Starting search...")
-search.fit(train_set, train_set.labels)
-logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
-
-# Print the best hyperparameters
-logging.info(f"Best Hyperparameters: {search.best_params_}")
-
-# display the entire CV results, too
-display(pd.DataFrame(search.cv_results_))
-
-# Beep when search is done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# Refit the model using the best found hyperparameters, with multiprocessing
-best_model = D2VClassifier(
-    **search.best_params_,
-    random_state=cp.seed,
-    workers=psutil.cpu_count(logical=False) - 1,
-)
-best_model.fit(train_set, train_set.labels)
-
-# Get the score of the best model on the test set
-best_model_score = best_model.score(test_set, test_set.labels)
-logging.info("Best Model Score:", best_model_score)
-
-# Beep again when best model is ready
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
-# Trying to fit a fraction of the data for testing
-
-# %%
-from sklearn.model_selection import cross_validate
-
-classifier = D2VClassifier(
-    random_state=cp.seed,
-    window=25,
-    vector_size=200,
-    epochs=5,
-    train_score=True,
-    workers=psutil.cpu_count(logical=False) - 1,
-)
-
-# CV = 4
-
-# tic = time.perf_counter()
-# logging.info("Starting CV...")
-# scores = cross_validate(
-#     classifier,
-#     toy_train_set,
-#     toy_train_set.labels,
-#     cv=CV,
-#     return_train_score=True,
-#     verbose=1,
-#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-# )
-# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
-# scores
-
-# tic = time.perf_counter()
-# logging.info("Fitting...")
-# classifier.fit(toy_train_set, toy_train_set.labels)
-# logging.info(f"Timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# classifier.score(toy_test_set, toy_test_set.labels)
 
 # %%
 # classifier.score(toy_test_set, toy_test_set.labels, threshold=0.492)

@@ -44,6 +44,7 @@ class D2VClassifier(BaseEstimator):
         sample: float = 1e-3,
         hs: int = 0,
         negative: int = 5,
+        ns_exponent: float = 0.75,
         workers: int = 1,
     ):
         """
@@ -120,9 +121,10 @@ class D2VClassifier(BaseEstimator):
         )
 
         # Count and display the amount of samples for each label
-        logging.info(f"[Estimator.fit] label_counter: {Counter(y)}")
+        logging.info(f"[D2VClassifier.fit] label_counter: {Counter(y)}")
 
         # Build vocabulary for Doc2Vec
+        logging.info("[D2VClassifier.fit] Building vocabulary...")
         self.model.build_vocab(X)
 
         # iterative training
@@ -144,9 +146,9 @@ class D2VClassifier(BaseEstimator):
                 # train a Doc2Vec model on the entire, sparsely labeled dataset
                 # set the alpha decay range according to the pre-defined ranges
                 self.model.alpha, self.model.min_alpha = alpha_ranges[epoch]
-                logging.info(f"[Estimator.fit] [epoch {epoch}] Training {self.get_params()}")
+                logging.info(f"[D2VClassifier.fit] [epoch {epoch}] Training {self.get_params()}")
                 logging.info(
-                    f"[Estimator.fit] [epoch {epoch}] alpha: {self.model.alpha:.2e}, min_alpha: {self.model.min_alpha:.2e}"
+                    f"[D2VClassifier.fit] [epoch {epoch}] alpha: {self.model.alpha:.2e}, min_alpha: {self.model.min_alpha:.2e}"
                 )
                 self.model.train(X, total_examples=self.model.corpus_count, epochs=1)
 
@@ -158,12 +160,12 @@ class D2VClassifier(BaseEstimator):
                 if self.train_score:
                     self.train_scores.append(self.score(X, y, **inference_params))
                     logging.info(
-                        f"[Estimator.fit] [epoch {epoch}] Training score: {self.train_scores[-1]:.3f}"
+                        f"[D2VClassifier.fit] [epoch {epoch}] Training score: {self.train_scores[-1]:.3f}"
                     )
                 if X_test is not None:
                     self.validation_scores.append(self.score(X_test, y_test, **inference_params))
                     logging.info(
-                        f"[Estimator.fit] [epoch {epoch}] Validation score: {self.validation_scores[-1]:.3f}"
+                        f"[D2VClassifier.fit] [epoch {epoch}] Validation score: {self.validation_scores[-1]:.3f}"
                     )
 
             # set the parameters for inference
@@ -184,12 +186,14 @@ class D2VClassifier(BaseEstimator):
         # single call to train with (possibly) multiple epochs
         else:
             # Train a Doc2Vec model on the entire, sparsely labeled dataset
-            logging.info(f"[Estimator.fit] Training {self.get_params()}")
+            logging.info(f"[D2VClassifier.fit] Training {self.get_params()}")
             self.model.train(X, total_examples=self.model.corpus_count, epochs=self.epochs)
 
             # calculate training score (optional)
             if self.train_score:
-                logging.info(f"[Estimator.fit] Training score: {self.score(X, y, verbose=False)}")
+                logging.info(
+                    f"[D2VClassifier.fit] Training score: {self.score(X, y, verbose=False)}"
+                )
 
         return self
 
@@ -369,7 +373,7 @@ class D2VClassifier(BaseEstimator):
             Tuple containing valid labels and indices.
         """
 
-        conv_dict = dict(unlabeled=np.nan, good=-1, bad=1)
+        conv_dict = {None: np.nan, "good": -1, "bad": 1}
         y_arr = np.array([conv_dict[label] for label in y])
         labeled_idxs = ~np.isnan(y_arr)
         return y_arr[labeled_idxs], labeled_idxs

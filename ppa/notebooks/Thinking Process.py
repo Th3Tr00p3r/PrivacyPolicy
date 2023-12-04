@@ -432,7 +432,7 @@ if SHOULD_FIT_MODEL:
 # %%
 from sklearn.model_selection import cross_validate
 
-N = cp.total_samples
+N = cp.total_samples // 10
 toy_train_set = cp.generate_samples(
     n_samples=N,
     labeled=False,
@@ -442,7 +442,7 @@ toy_train_set = cp.generate_samples(
 print(Counter(toy_train_set.labels))
 
 cv_classifier = D2VClassifier(
-    epochs=5,
+    epochs=1,
     vector_size=84,
     window=5,
     negative=20,

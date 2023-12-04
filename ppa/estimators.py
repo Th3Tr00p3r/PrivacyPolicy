@@ -1,9 +1,9 @@
 import logging
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 import numpy as np
-from gensim.models.doc2vec import Doc2Vec
+from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from sklearn.base import BaseEstimator
 
 # from sklearn.ensemble import IsolationForest
@@ -83,7 +83,7 @@ class D2VClassifier(BaseEstimator):
             setattr(self, key, value)
 
     @timer(1000)
-    def fit(self, X: SampleGenerator, y: List[str]):
+    def fit(self, X: SampleGenerator | List[TaggedDocument], y: List[str]):
         """
         Fit the Doc2Vec Classifier.
 
@@ -134,8 +134,18 @@ class D2VClassifier(BaseEstimator):
         good_idxs = y_arr == -1
         bad_idxs = y_arr == 1
         # trasform them separately
-        X_good = X.sample(idxs=np.nonzero(good_idxs)[0])
-        X_bad = X.sample(idxs=np.nonzero(bad_idxs)[0])
+        try:
+            X_good: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+                idxs=np.nonzero(good_idxs)[0]
+            )
+            X_bad: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+                idxs=np.nonzero(bad_idxs)[0]
+            )
+        except AttributeError:
+            # X is a list
+
+            X_good = [X[idx] for idx in np.nonzero(good_idxs)[0]]
+            X_bad = [X[idx] for idx in np.nonzero(bad_idxs)[0]]
         mean_good = self.transform(X_good).mean(axis=0)
         mean_bad = self.transform(X_bad).mean(axis=0)
         # add them as the "good"/"bad" model vectors, replacing if exist (if model was trained with those secondary tags)
@@ -152,7 +162,7 @@ class D2VClassifier(BaseEstimator):
 
     def transform(
         self,
-        X: SampleGenerator,
+        X: SampleGenerator | List[TaggedDocument],
         epochs=None,
         alpha=None,
         min_alpha=None,
@@ -191,7 +201,9 @@ class D2VClassifier(BaseEstimator):
 
         return X_vec
 
-    def decision_function(self, X=None, X_vec=None, **kwargs) -> np.ndarray:
+    def decision_function(
+        self, X: SampleGenerator | List[TaggedDocument] = None, X_vec: np.ndarray = None, **kwargs
+    ) -> np.ndarray:
         """
         Compute decision function scores based on similarity between vectors.
 
@@ -220,7 +232,11 @@ class D2VClassifier(BaseEstimator):
 
     #     @timer(1000)
     def predict(
-        self, X: SampleGenerator, threshold: float = None, get_scores=False, **kwargs
+        self,
+        X: SampleGenerator | List[TaggedDocument],
+        threshold: float = None,
+        get_scores=False,
+        **kwargs,
     ) -> np.ndarray | Tuple[np.ndarray, np.ndarray]:
         """
         Predict labels based on decision function scores.
@@ -249,7 +265,7 @@ class D2VClassifier(BaseEstimator):
             return y_pred
 
     #     @timer(1000)
-    def score(self, X: SampleGenerator, y: List[str], plot=False, **kwargs):
+    def score(self, X: SampleGenerator | List[TaggedDocument], y: List[str], plot=False, **kwargs):
         """
         Compute the balanced accuracy score and other evaluation metrics.
 
@@ -272,7 +288,13 @@ class D2VClassifier(BaseEstimator):
         y_true, labeled_idxs = self.valid_labels(y)
 
         # scoring is only possible on labeled samples
-        X_labeled = X.sample(idxs=np.nonzero(labeled_idxs)[0])
+        try:
+            X_labeled: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+                idxs=np.nonzero(labeled_idxs)[0]
+            )
+        except AttributeError:
+            # X is a list
+            X_labeled = [X[idx] for idx in np.nonzero(labeled_idxs)[0]]
 
         # predict and get scores
         y_pred, y_scores = self.predict(X_labeled, get_scores=True, **kwargs)

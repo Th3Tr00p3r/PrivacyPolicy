@@ -392,7 +392,7 @@ Beep(1000, 500)
 # ## 4.1 Model Training and Optimization
 
 # %% [markdown]
-# Train a specific Doc2Vec model (semi-supervised), and save:
+# Train a specific Doc2Vec model (unsupervised), and save:
 
 # %%
 from ppa.estimators import D2VClassifier
@@ -400,13 +400,13 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-# SHOULD_FIT_MODEL = True
-SHOULD_FIT_MODEL = False
+SHOULD_FIT_MODEL = True
+# SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
     # initialize classifier
     classifier = D2VClassifier(
-        epochs=5,
+        epochs=15,
         vector_size=84,  # 84?
         window=5,
         negative=20,
@@ -417,7 +417,7 @@ if SHOULD_FIT_MODEL:
     )
 
     # fit the model
-    classifier.fit(train_set, train_set.labels, X_test=test_set, y_test=test_set.labels)
+    classifier.fit(train_set, train_set.labels)
 
     # score the model
     print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
@@ -425,6 +425,10 @@ if SHOULD_FIT_MODEL:
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
     classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
+
+# %%
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Cross validate
@@ -441,21 +445,19 @@ toy_train_set = cp.generate_samples(
 )
 print(Counter(toy_train_set.labels))
 
-cv_classifier = D2VClassifier(
-    epochs=1,
-    vector_size=84,
-    window=5,
-    negative=20,
-    random_state=cp.seed,
-    #     workers=psutil.cpu_count(logical=False) - 1
-)
-
 CV = 4
 
 tic = time.perf_counter()
 logging.info("Starting CV...")
 scores = cross_validate(
-    cv_classifier,
+    D2VClassifier(
+        epochs=1,
+        vector_size=84,
+        window=5,
+        negative=20,
+        random_state=cp.seed,
+        #     workers=psutil.cpu_count(logical=False) - 1
+    ),
     toy_train_set,
     toy_train_set.labels,
     cv=CV,
@@ -467,10 +469,6 @@ logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
 print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
 scores_df = pd.DataFrame(scores)
 display(scores_df)
-
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Perform search to find best set of hyperparameters
@@ -565,7 +563,7 @@ if not SHOULD_FIT_MODEL:
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
 #
-# Doc2Vec, using secondary tags, is at best a weakly semi-supervised model, so finding a metric to evaluate it is not a straightforward task.
+# Doc2Vec is an unsupervised model, so finding a metric to evaluate it is not a straightforward task.
 # Since I am still basically doing EDA, let's take a look at the test data in the learned vector embeddings, and see if any clusters emerge. My current short-term goal is to classify policies as "good" or "bad" (for the end-user, of course!), so I'm hoping to be able to see some clear boundries in the data.
 
 # %% [markdown]

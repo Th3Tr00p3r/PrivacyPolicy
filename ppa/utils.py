@@ -386,6 +386,8 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
                         if beep:
                             Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
                     return value
+                else:
+                    return func(*args, **kwargs)
 
         else:
 
@@ -422,6 +424,8 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
                         if beep:
                             Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
                     return value
+                else:
+                    return func(*args, **kwargs)
 
         return wrapper
 

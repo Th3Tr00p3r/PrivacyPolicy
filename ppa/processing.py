@@ -5,7 +5,6 @@ import pickle
 import re
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 from typing import Dict, List
 from winsound import Beep
@@ -46,8 +45,6 @@ class SampleGenerator:
         Path to the data file.
     start_pos_list : List[int]
         List of starting positions in the file for sampling.
-    shuffled : bool, optional
-        Flag to shuffle the start positions, by default False.
     index_suffix : str, optional
         Suffix for the index, by default "_idx".
     rng : np.random.Generator, optional
@@ -58,7 +55,7 @@ class SampleGenerator:
 
     fpath: Path
     start_pos_list: List[int]
-    shuffled: bool = False
+    labeled: bool
     index_suffix: str = "_idx"
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
     text_only: bool = False
@@ -76,13 +73,12 @@ class SampleGenerator:
 
         return self._labels or self._get_labels()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """
         Initialize SampleGenerator.
         """
 
-        self.indexed_file = partial(
-            IndexedFile,
+        self.indexed_file = IndexedFile(
             self.fpath,
             "read",
             self.rng,
@@ -130,7 +126,7 @@ class SampleGenerator:
         return SampleGenerator(
             self.fpath,
             start_pos_list,
-            self.shuffled,
+            self.labeled,
             self.index_suffix,
             self.rng,
             self.text_only,
@@ -146,9 +142,11 @@ class SampleGenerator:
             Yielded samples.
         """
 
-        for tokens, key, label in self.indexed_file(shuffled=self.shuffled).read_all():
+        for tokens, key, label in self.indexed_file.read_all():
             if not self.text_only:
-                yield TaggedDocument(tokens, ([key, label] if label is not None else [key]))
+                yield TaggedDocument(
+                    tokens, ([key, label] if (label != "unlabeled") and self.labeled else [key])
+                )
             else:
                 yield tokens
 
@@ -179,11 +177,13 @@ class SampleGenerator:
         for pos_idx in pos_idxs:
             # convert key to index (optional getting by URL)
             if isinstance(pos_idx, str):
-                pos_idx = self.indexed_file().key_to_pos_idx(pos_idx)
-            with self.indexed_file() as idx_input_file:
+                pos_idx = self.indexed_file.key_to_pos_idx(pos_idx)
+            with self.indexed_file as idx_input_file:
                 tokens, key, label = idx_input_file.read_idx(pos_idx)
                 samples.append(
-                    TaggedDocument(tokens, ([key, label] if label is not None else [key]))
+                    TaggedDocument(
+                        tokens, ([key, label] if (label != "unlabeled") and self.labeled else [key])
+                    )
                 )
 
         # if more than one sample, return as list
@@ -195,7 +195,7 @@ class SampleGenerator:
     def index(self, key) -> int:
         """Get index of key"""
 
-        return self.indexed_file().key_to_pos_idx(key)
+        return self.indexed_file.key_to_pos_idx(key)
 
     def __len__(self) -> int:
         """
@@ -211,7 +211,7 @@ class SampleGenerator:
             return len(self.start_pos_list)
         except TypeError:
             len_ = 0
-            for _ in self.indexed_file().read_all():
+            for _ in self.indexed_file.read_all():
                 len_ += 1
             return len_
 
@@ -226,13 +226,18 @@ class SampleGenerator:
         """
 
         pos2label = {}
-        with open(self.indexed_file().idx_fpath, "r") as label_idx_file:
+        with open(self.indexed_file.idx_fpath, "r") as label_idx_file:
             for line in label_idx_file:
                 pos, _, label = json.loads(line.strip())
                 pos2label[pos] = label
 
         self._labels = [pos2label[pos] for pos in self.start_pos_list]
         return self._labels
+
+    def to_list(self):
+        """Doc."""
+
+        return list(self)
 
 
 @dataclass
@@ -300,7 +305,7 @@ class CorpusProcessor:
                 # Add to the dictionary
                 self.dct.add_documents([tokenized_doc])
                 # Serialize the document tokens using pickle and write to file
-                corpus_file.write(tokenized_doc, notes=(domain_name, None))
+                corpus_file.write(tokenized_doc, notes=(domain_name, "unlabeled"))
 
         # process n-grams
         if bigrams:
@@ -415,7 +420,8 @@ class CorpusProcessor:
         doc_lengths = [
             len(tagged_doc.words)
             for tagged_doc in self.generate_samples(
-                n_samples=1000, shuffled_idx=True, shuffled_gen=True
+                n_samples=1000,
+                shuffled=True,
             )
         ]
         min_tokens, max_tokens = np.percentile(
@@ -536,8 +542,7 @@ class CorpusProcessor:
         fpath: Path = None,
         test_frac: float = 0.2,
         labeled=False,
-        shuffled_idx=False,
-        shuffled_gen=False,
+        shuffled=False,
         n_samples: int = None,
         text_only: bool = False,
         upsampling: bool = False,  # TESTESTEST
@@ -553,10 +558,8 @@ class CorpusProcessor:
             Fraction of data for the test set, by default 0.2.
         labeled : bool, optional
             Flag for labeled corpus, by default False.
-        shuffled_idx : bool, optional
+        shuffled : bool, optional
             Toggle index shuffling, by default False.
-        shuffled_gen : bool, optional
-            Toggle sample shuffling, by default False.
         n_samples : int, optional
             Number of samples, by default None.
         text_only : bool, optional
@@ -587,7 +590,7 @@ class CorpusProcessor:
                         break
 
             # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled_idx:
+            if shuffled:
                 for index_list in index_dict.values():
                     self.rng.shuffle(index_list)
 
@@ -653,7 +656,7 @@ class CorpusProcessor:
                         break
 
             # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled_idx:
+            if shuffled:
                 self.rng.shuffle(index_list)
 
             # create train/test file indices
@@ -666,15 +669,15 @@ class CorpusProcessor:
             return SampleGenerator(
                 fpath,
                 train_start_positions,
-                shuffled=shuffled_gen,
+                labeled,
                 text_only=text_only,
             )
         else:
             return SampleGenerator(
                 fpath,
                 train_start_positions,
-                shuffled=shuffled_gen,
-            ), SampleGenerator(fpath, test_start_positions, shuffled=shuffled_gen)
+                labeled,
+            ), SampleGenerator(fpath, test_start_positions, labeled)
 
     def generate_samples(self, *args, **kwargs):
         """

@@ -155,10 +155,7 @@ Beep(1000, 500)
 
 # %%
 pp_lengths = np.array(
-    [
-        len(tagged_doc.words)
-        for tagged_doc in cp.generate_samples(n_samples=5_000, shuffled_idx=True, shuffled_gen=True)
-    ]
+    [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=5_000, shuffled=True)]
 )
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
@@ -178,7 +175,7 @@ print(f"median PP length: {np.median(pp_lengths):,.0f} tokens")
 cp.dict_info()
 
 # %% [markdown]
-# First, let's plot a histogram of the most frequent tokens in each document. For a robustly varied corpus, I would expect a long-tailed distribution of per-doc appearances for the most common tokens. If the distribution decays to quickly, most tokens would effectively be just noise, and the corpus could be too simple.
+# First, let's plot a histogram of the most frequent tokens in each document. For a robustly varied corpus, I would expect a long-tailed distribution of per-doc appearances for the most common tokens. If the distribution decays too quickly, most tokens would effectively be just noise, and the corpus could be too simple.
 
 # %%
 token_ids = np.array(list(cp.dct.dfs.keys()))
@@ -302,7 +299,7 @@ data_loader = ToSDRDataLoader()
 #     force_extract=FORCE_EXT,
 #     force_transform=FORCE_TRANS,
 # )
-ratings_df = pd.DataFrame()  # TESTESTEST - to shut mypy up
+ratings_df = pd.DataFrame({})
 raise ValueError("Uncomment the 'await'!!!")
 
 Beep(1000, 500)
@@ -381,8 +378,8 @@ TEST_FRAC = 0.2
 train_set, test_set = cp.generate_train_test_sets(
     n_samples=N,
     test_frac=TEST_FRAC,
-    labeled=True,
-    shuffled_idx=True,
+    labeled=False,
+    shuffled=True,
     #     upsampling=True,
 )
 
@@ -391,12 +388,11 @@ print(Counter(test_set.labels))
 
 Beep(1000, 500)
 
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
+# %% [markdown]
+# ## 4.1 Model Training and Optimization
 
 # %% [markdown]
-# Train the Doc2Vec model (semi-supervised), and save:
+# Train a specific Doc2Vec model (semi-supervised), and save:
 
 # %%
 from ppa.estimators import D2VClassifier
@@ -404,17 +400,17 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-SHOULD_FIT_MODEL = True
-# SHOULD_FIT_MODEL = False
+# SHOULD_FIT_MODEL = True
+SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
     # initialize classifier
     classifier = D2VClassifier(
-        epochs=10,
+        epochs=5,
         vector_size=84,  # 84?
         window=5,
         negative=20,
-        train_score=True,
+        #         train_score=True,
         random_state=cp.seed,
         #     iterative_training=True,
         workers=psutil.cpu_count(logical=False) - 1,
@@ -429,6 +425,122 @@ if SHOULD_FIT_MODEL:
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
     classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
+
+# %% [markdown]
+# Cross validate
+
+# %%
+from sklearn.model_selection import cross_validate
+
+N = cp.total_samples
+toy_train_set = cp.generate_samples(
+    n_samples=N,
+    labeled=False,
+    shuffled=True,
+    #     upsampling=True,
+)
+print(Counter(toy_train_set.labels))
+
+cv_classifier = D2VClassifier(
+    epochs=5,
+    vector_size=84,
+    window=5,
+    negative=20,
+    random_state=cp.seed,
+    #     workers=psutil.cpu_count(logical=False) - 1
+)
+
+CV = 4
+
+tic = time.perf_counter()
+logging.info("Starting CV...")
+scores = cross_validate(
+    cv_classifier,
+    toy_train_set,
+    toy_train_set.labels,
+    cv=CV,
+    #     return_train_score=True,
+    verbose=10,
+    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+)
+logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+scores_df = pd.DataFrame(scores)
+display(scores_df)
+
+# %%
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
+
+# %% [markdown]
+# Perform search to find best set of hyperparameters
+
+# %%
+from sklearn.experimental import enable_halving_search_cv  # noqa
+from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
+from scipy.stats import randint, uniform
+
+# Create a larger parameter grid with more combinations
+param_dist = {
+    "epochs": [1],
+    #     "vector_size": [74, 100, 154],
+    #     "window": [5, 7, 9],
+    #     "negative": [5, 10, 20],
+}
+
+N_SPLITS = 2
+HRS_SEED = randint(0, 2**32).rvs()
+
+# Update the hyperparameter search to use the pipeline
+search = GridSearchCV(
+    estimator=D2VClassifier(
+        epochs=1,
+        vector_size=84,
+        window=5,
+        negative=20,
+        random_state=cp.seed,
+        #         workers=psutil.cpu_count(logical=False) - 1,
+    ),
+    #     param_distributions=param_dist,
+    param_grid=param_dist,
+    #     n_candidates="exhaust",
+    verbose=4,
+    #     random_state=HRS_SEED,
+    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
+    #     min_resources=15000,
+    #     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+    refit=False,
+)
+
+# Fit the hyperparameter search on your training data
+tic = time.perf_counter()
+logging.info("Starting search...")
+search.fit(toy_train_set, toy_train_set.labels)
+logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+# Print the best hyperparameters
+logging.info(f"Best Hyperparameters: {search.best_params_}")
+
+# display the entire CV results, too
+display(pd.DataFrame(search.cv_results_))
+
+# Beep when search is done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# Refit the model using the best found hyperparameters, with multiprocessing
+best_model = D2VClassifier(
+    **search.best_params_,
+    random_state=cp.seed,
+    workers=psutil.cpu_count(logical=False) - 1,
+)
+best_model.fit(train_set, train_set.labels)
+
+# Get the score of the best model on the test set
+best_model_score = best_model.score(test_set, test_set.labels)
+logging.info("Best Model Score:", best_model_score)
+
+# Beep again when best model is ready
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # Load existing model to estimator
@@ -505,7 +617,7 @@ from sklearn.manifold import TSNE
 
 tsne = TSNE(
     n_components=2,
-    perplexity=20,
+    perplexity=1,
     learning_rate=200,
     n_iter=1000,
     n_iter_without_progress=500,
@@ -521,7 +633,7 @@ tsne_result = tsne.fit_transform(test_vectors_labeled)
 display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
-# I cannot see any pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualizations don't seem to capture it.
+# I cannot see any clear pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualizations don't seem to capture it.
 
 # %% [markdown]
 # ## 5.3 Devising a metric <a id='sec-5-3'></a>
@@ -641,104 +753,6 @@ df[df["label"] == "good"].sort_values(by="score")
 
 # %% [markdown]
 # Since I recognize some of the URLs as having legitimately "good" privacy policies, and the worst scored one is that of Vancouver's public library, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
-
-# %% [markdown]
-# # 6 Optimization
-# # 6.1 Cross-Validation
-
-# %%
-from sklearn.model_selection import cross_validate
-
-CV = 4
-
-tic = time.perf_counter()
-logging.info("Starting CV...")
-scores = cross_validate(
-    D2VClassifier(
-        epochs=10,
-        vector_size=84,
-        window=5,
-        negative=20,
-        random_state=cp.seed,
-    ),
-    train_set,
-    train_set.labels,
-    cv=CV,
-    return_train_score=True,
-    verbose=1,
-    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-)
-logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
-scores_df = pd.DataFrame(scores)
-display(scores_df)
-
-# %% [markdown]
-# ## 6.2 Hyperparameter Search
-# Perform search to find best set of hyperparameters
-
-# %%
-from sklearn.experimental import enable_halving_search_cv  # noqa
-from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
-from scipy.stats import randint, uniform
-
-# Create a larger parameter grid with more combinations
-param_dist = {
-    "epochs": [10],
-    "vector_size": [74, 100, 154],
-    "window": [5, 7, 9],
-    "negative": [5, 10, 20],
-}
-
-N_SPLITS = 3
-HRS_SEED = randint(0, 2**32).rvs()
-
-# Update the hyperparameter search to use the pipeline
-search = GridSearchCV(
-    estimator=D2VClassifier(
-        random_state=cp.seed,
-        workers=psutil.cpu_count(logical=False) - 1,
-    ),
-    #     param_distributions=param_dist,
-    param_grid=param_dist,
-    #     n_candidates="exhaust",
-    verbose=1,
-    #     random_state=HRS_SEED,
-    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
-    #     min_resources=15000,
-    #     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
-    refit=False,
-)
-
-# Fit the hyperparameter search on your training data
-tic = time.perf_counter()
-logging.info("Starting search...")
-search.fit(train_set, train_set.labels)
-logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
-
-# Print the best hyperparameters
-logging.info(f"Best Hyperparameters: {search.best_params_}")
-
-# display the entire CV results, too
-display(pd.DataFrame(search.cv_results_))
-
-# Beep when search is done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# Refit the model using the best found hyperparameters, with multiprocessing
-best_model = D2VClassifier(
-    **search.best_params_,
-    random_state=cp.seed,
-    workers=psutil.cpu_count(logical=False) - 1,
-)
-best_model.fit(train_set, train_set.labels)
-
-# Get the score of the best model on the test set
-best_model_score = best_model.score(test_set, test_set.labels)
-logging.info("Best Model Score:", best_model_score)
-
-# Beep again when best model is ready
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # # 6 Considering Upsampling and Pseudo-Labeling

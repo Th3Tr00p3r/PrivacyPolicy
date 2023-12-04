@@ -30,12 +30,6 @@ class D2VClassifier(BaseEstimator):
 
     def __init__(
         self,
-        # General
-        epochs: int = 10,
-        iterative_training=False,
-        train_score: bool = False,
-        random_state: int = None,
-        threshold: float = 0.5,
         # Doc2Vec kwargs
         vector_size: int = 300,
         dm: int = 1,
@@ -45,6 +39,11 @@ class D2VClassifier(BaseEstimator):
         hs: int = 0,
         negative: int = 5,
         ns_exponent: float = 0.75,
+        # General
+        epochs: int = 10,
+        train_score: bool = False,
+        random_state: int = None,
+        threshold: float = 0.5,
         workers: int = 1,
     ):
         """
@@ -54,8 +53,6 @@ class D2VClassifier(BaseEstimator):
         ----------
         epochs : int
             Number of training epochs.
-        iterative_training : bool, optional
-            Flag indicating iterative training, by default False.
         train_score : bool, optional
             Flag to compute training score, by default False.
         random_state : int, optional
@@ -86,7 +83,7 @@ class D2VClassifier(BaseEstimator):
             setattr(self, key, value)
 
     @timer(1000)
-    def fit(self, X: SampleGenerator, y, X_test: SampleGenerator = None, y_test=None):
+    def fit(self, X: SampleGenerator, y: List[str]):
         """
         Fit the Doc2Vec Classifier.
 
@@ -96,10 +93,6 @@ class D2VClassifier(BaseEstimator):
             Training samples.
         y : array-like
             Target labels.
-        X_test : SampleGenerator, optional
-            Test samples, by default None.
-        y_test : array-like, optional
-            Test labels, by default None.
 
         Returns
         -------
@@ -127,80 +120,39 @@ class D2VClassifier(BaseEstimator):
         logging.info("[D2VClassifier.fit] Building vocabulary...")
         self.model.build_vocab(X)
 
-        # iterative training
-        if self.iterative_training:
+        # Train a Doc2Vec model on the entire, sparsely labeled dataset
+        logging.info(f"[D2VClassifier.fit] Training {self.get_params()}")
+        self.model.train(X, total_examples=self.model.corpus_count, epochs=self.epochs)
 
-            # get learning rate ranges for each epoch, linearly decaying
-            alpha_edges = np.linspace(self.model.alpha, self.model.min_alpha, self.epochs + 1)
-            alpha_ranges = np.array([alpha_edges[:-1], alpha_edges[1:]]).T
+        # getting mean labeled training vectors (inferred)
+        logging.info(
+            "[D2VClassifier.fit] Getting good/bad mean vectors based on inference of labeled training samples..."
+        )
+        # get indices for all good/bad training vectors
+        label2num = {"unlabeled": np.nan, "good": -1, "bad": 1}
+        y_arr = np.array([label2num[label] for label in y])
+        good_idxs = y_arr == -1
+        bad_idxs = y_arr == 1
+        # trasform them separately
+        X_good = X.sample(idxs=np.nonzero(good_idxs)[0])
+        X_bad = X.sample(idxs=np.nonzero(bad_idxs)[0])
+        mean_good = self.transform(X_good).mean(axis=0)
+        mean_bad = self.transform(X_bad).mean(axis=0)
+        # add them as the "good"/"bad" model vectors, replacing if exist (if model was trained with those secondary tags)
+        self.model.dv.add_vectors(["good", "bad"], [mean_good, mean_bad], replace=True)
 
-            # set the parameters for inference
-            inference_params = dict(
-                alpha=(max_alpha := alpha_ranges[0][0]),  # initial learning rate
-                min_alpha=(min_alpha := alpha_ranges[-1][-1]),  # final learning rate
+        # calculate training score (optional)
+        if self.train_score:
+            logging.info("[D2VClassifier.fit] Calculating training score...")
+            logging.info(
+                f"[D2VClassifier.fit] Training score (Balanced ACC.): {self.score(X, y, verbose=False)}"
             )
-
-            self.train_scores = []
-            self.validation_scores = []
-            for epoch in range(self.epochs):
-                # train a Doc2Vec model on the entire, sparsely labeled dataset
-                # set the alpha decay range according to the pre-defined ranges
-                self.model.alpha, self.model.min_alpha = alpha_ranges[epoch]
-                logging.info(f"[D2VClassifier.fit] [epoch {epoch}] Training {self.get_params()}")
-                logging.info(
-                    f"[D2VClassifier.fit] [epoch {epoch}] alpha: {self.model.alpha:.2e}, min_alpha: {self.model.min_alpha:.2e}"
-                )
-                self.model.train(X, total_examples=self.model.corpus_count, epochs=1)
-
-                # calculate training score (optional)
-
-                # set the parameters for inference
-                inference_params["epochs"] = max(5, epoch + 1)
-
-                if self.train_score:
-                    self.train_scores.append(self.score(X, y, **inference_params))
-                    logging.info(
-                        f"[D2VClassifier.fit] [epoch {epoch}] Training score: {self.train_scores[-1]:.3f}"
-                    )
-                if X_test is not None:
-                    self.validation_scores.append(self.score(X_test, y_test, **inference_params))
-                    logging.info(
-                        f"[D2VClassifier.fit] [epoch {epoch}] Validation score: {self.validation_scores[-1]:.3f}"
-                    )
-
-            # set the parameters for inference
-            self.model.alpha, self.model.min_alpha = max_alpha, min_alpha
-            self.model.epochs = self.epochs
-
-            # TESTESTEST
-            # plot learning curves
-            with Plotter(
-                suptitle="Learning Curves",
-                xlabel="Epoch",
-                ylabel="Balanced ACC",
-            ) as ax:
-                ax.plot(self.train_scores)
-                ax.plot(self.validation_scores)
-            # /TESTESTEST
-
-        # single call to train with (possibly) multiple epochs
-        else:
-            # Train a Doc2Vec model on the entire, sparsely labeled dataset
-            logging.info(f"[D2VClassifier.fit] Training {self.get_params()}")
-            self.model.train(X, total_examples=self.model.corpus_count, epochs=self.epochs)
-
-            # calculate training score (optional)
-            if self.train_score:
-                logging.info(
-                    f"[D2VClassifier.fit] Training score: {self.score(X, y, verbose=False)}"
-                )
 
         return self
 
     def transform(
         self,
         X: SampleGenerator,
-        normalized=False,
         epochs=None,
         alpha=None,
         min_alpha=None,
@@ -229,7 +181,7 @@ class D2VClassifier(BaseEstimator):
         """
 
         logging.info(
-            f"[Estimator.transform] Inferring{' normalized ' if normalized else ' '}vector embeddings for {len(X):,} documents..."
+            f"[Estimator.transform] Inferring vector embeddings for {len(X):,} documents..."
         )
         X_vec = np.empty((len(X), self.model.vector_size), dtype=float)
         for idx, td in enumerate(X):
@@ -237,14 +189,7 @@ class D2VClassifier(BaseEstimator):
                 td.words, epochs=epochs, alpha=alpha, min_alpha=min_alpha
             )
 
-        if normalized:
-            # Compute L2 norm for each row
-            row_norms = np.linalg.norm(X_vec, axis=1, keepdims=True)
-            # Normalize each row by dividing by its L2 norm
-            return X_vec / row_norms
-
-        else:
-            return X_vec
+        return X_vec
 
     def decision_function(self, X=None, X_vec=None, **kwargs) -> np.ndarray:
         """
@@ -373,7 +318,7 @@ class D2VClassifier(BaseEstimator):
             Tuple containing valid labels and indices.
         """
 
-        conv_dict = {None: np.nan, "good": -1, "bad": 1}
+        conv_dict = {"unlabeled": np.nan, "good": -1, "bad": 1}
         y_arr = np.array([conv_dict[label] for label in y])
         labeled_idxs = ~np.isnan(y_arr)
         return y_arr[labeled_idxs], labeled_idxs

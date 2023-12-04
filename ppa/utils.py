@@ -29,7 +29,6 @@ class IndexedFile:
     rng: np.random.Generator = None
     start_pos_list: List[int] = field(default_factory=list)
     index_suffix: InitVar[str] = "_idx"
-    shuffled: bool = False
 
     def __post_init__(self, index_suffix: str):
         """
@@ -64,9 +63,7 @@ class IndexedFile:
         if self.mode == "read":
             self.file = open(self.fpath, "r")
             self.pos_idx = 0  # keep track of the file position index
-            if self.shuffled:
-                # shuffle each time entered
-                self.rng.shuffle(self.start_pos_list)
+
         elif self.mode in {"write", "reindex"}:
             self.file = self.temp_file
             self.notes = []
@@ -107,7 +104,7 @@ class IndexedFile:
         """
 
         if notes and len(notes) < 2:
-            notes.append(None)
+            notes.append("unlabeled")
 
         if self.mode == "write":
             start_pos = self.file.tell()
@@ -160,8 +157,6 @@ class IndexedFile:
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
-        if self.shuffled:
-            self.rng.shuffle(self.start_pos_list)
         with open(self.fpath, "r") as file:
             for pos in self.start_pos_list:
                 file.seek(pos)

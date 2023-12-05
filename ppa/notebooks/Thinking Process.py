@@ -428,7 +428,7 @@ if SHOULD_FIT_MODEL:
 # Cross validate
 
 # %% [markdown]
-# # TODO: <s>see if the attempt at using model vectors does about 0.75 in balanced accuracy (same as using inferred training vectors)?</s> YES! WITH EPOCHS=5
+# # TODO: <s>see if the attempt at using model vectors does about 0.75 in balanced accuracy (same as using inferred training vectors)?</s> YES! WITH EPOCHS=5 got ~0.76
 #
 # # TODO: CHECK THE SAME FOR UPSAMPLING
 
@@ -465,7 +465,7 @@ scores = cross_validate(
     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
 )
 logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+print("Mean test score: ", np.nanmean(scores["test_score"]))
 scores_df = pd.DataFrame(scores)
 display(scores_df)
 

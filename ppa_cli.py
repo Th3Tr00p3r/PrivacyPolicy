@@ -9,7 +9,7 @@ from ppa.processing import CorpusProcessor
 MODEL_DIR_PATH = Path.cwd() / "ppa" / "models"
 
 processor = CorpusProcessor.load(MODEL_DIR_PATH / "corpus_processor.pkl")
-classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
+classifier = D2VClassifier.load(MODEL_DIR_PATH / "pp_d2v.pkl")
 
 app = typer.Typer()
 

@@ -1,7 +1,6 @@
 import json
 import logging
 import logging.config
-import pickle
 import re
 from collections import Counter
 from copy import copy, deepcopy
@@ -257,40 +256,47 @@ class CorpusProcessor:
     Process and manipulate a corpus of text documents.
     """
 
-    fpaths: List[Path]
     save_dir_path: Path
-    seed: int = None
-    dct: Dictionary = None
+
+    @property
+    def total_samples(self):
+        return self.dct.num_docs
 
     def __post_init__(self) -> None:
         """
         Initialize the CorpusProcessor after the object creation.
         """
 
-        self.total_samples: int = len(self.fpaths)
-
         # file paths:
         self.dict_path = self.save_dir_path / "dictionary.pkl"
         self.corpus_path = self.save_dir_path / "corpus.json"
+        self.bigrams_path = self.save_dir_path / "bigrams.model"
+
+        try:
+            self.dct = Dictionary.load(str(self.dict_path))
+        except FileNotFoundError:
+            logging.warning("Dictionary missing!")
+        try:
+            self.bigram = Dictionary.load(str(self.bigrams_path))
+        except FileNotFoundError:
+            logging.warning("FrozenPhrases (bigrams) missing!")
 
     def __repr__(self):
         """
         Return a string representation of the CorpusProcessor object.
         """
 
-        return f"CorpusProcessor({self.total_samples:,} docs, seed={self.seed})"
+        return f"CorpusProcessor({self.total_samples:,} docs)"
 
     @timer(1000)
     def process_corpus(
-        self, force: bool = False, filter_tokens: bool = True, bigrams: bool = True, **kwargs
+        self, fpaths: List[Path], filter_tokens: bool = True, bigrams: bool = True, **kwargs
     ):
         """
         Process the corpus for dictionary creation and tokenization.
 
         Parameters
         ----------
-        force : bool, optional
-            Force reprocessing of the corpus, by default False.
         filter_tokens : bool, optional
             Toggle token filtering, by default True.
         bigrams : bool, optional
@@ -304,7 +310,7 @@ class CorpusProcessor:
         self.dct = Dictionary()
         with IndexedFile(self.corpus_path, "write") as corpus_file:
             # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
-            for fidx, fpath in enumerate(self.fpaths):
+            for fidx, fpath in enumerate(fpaths):
                 # Track progress visually
                 if not (fidx + 1) % (self.total_samples / 10):
                     logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
@@ -321,10 +327,10 @@ class CorpusProcessor:
 
         # filter and remove the filtered documents from the total count
         if filter_tokens:
-            self.total_samples -= self._filter_tokens(**kwargs)
+            self._filter_tokens(**kwargs)
 
         # save
-        self.save()
+        self.dct.save(str(self.dict_path))
 
     def process_document(self, doc: str, url: str):
         """Process a single document based on Dictionary and FrozenPhrases objects learned form entire corpus."""
@@ -364,6 +370,7 @@ class CorpusProcessor:
             n_unique_tokens = len(self.dct)
             min_count = round(n_total_tokens / n_unique_tokens)
 
+        # train Phrases mode on entire corpus
         logging.info(f"[CorpusProcessor._unite_bigrams] Getting bigrams (min_count={min_count})...")
         self.bigram = Phrases(
             self.generate_samples(text_only=True),
@@ -372,6 +379,8 @@ class CorpusProcessor:
             scoring="npmi",
             delimiter="-",
         ).freeze()
+        # save to disk
+        self.bigram.save(str(self.bigrams_path))
 
         n_unique_tokens_before = len(self.dct)
 
@@ -403,7 +412,7 @@ class CorpusProcessor:
         min_percentile: int = 1,
         max_percentile: int = 99,
         **kwargs,
-    ) -> int:
+    ) -> None:
         """
         Filter tokens based on document statistics.
 
@@ -429,7 +438,6 @@ class CorpusProcessor:
             len(tagged_doc.words)
             for tagged_doc in self.generate_samples(
                 n_samples=1000,
-                shuffled=True,
             )
         ]
         min_tokens, max_tokens = np.percentile(
@@ -509,8 +517,6 @@ class CorpusProcessor:
             f"[CorpusProcessor._filter_tokens] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
         )
 
-        return n_docs_filtered
-
     def dict_info(self) -> None:
         """
         Display information about the dictionary.
@@ -549,9 +555,9 @@ class CorpusProcessor:
         self,
         fpath: Path = None,
         test_frac: float = 0.2,
-        shuffled: bool = False,
+        seed: int = None,
         n_samples: int = None,
-        upsampling: bool = False,  # TESTESTEST
+        upsampling: bool = False,
         **kwargs,
     ):
         """
@@ -565,8 +571,8 @@ class CorpusProcessor:
             Fraction of data for the test set, by default 0.2.
         labeled : bool, optional
             Flag for labeled corpus, by default False.
-        shuffled : bool, optional
-            Toggle index shuffling, by default False.
+        seed : int, optional
+            Integer seed for deterministic train/test splitting.
         n_samples : int, optional
             Number of samples, by default None.
         text_only : bool, optional
@@ -579,7 +585,7 @@ class CorpusProcessor:
         """
 
         # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
-        rng = np.random.default_rng(self.seed)
+        rng = np.random.default_rng(seed)
 
         fpath = fpath or self.corpus_path
 
@@ -598,21 +604,19 @@ class CorpusProcessor:
                 except json.JSONDecodeError:
                     break
 
-        # Shuffle the index (optional) - this means choosing different train/test sets
-        if shuffled:
-            for index_list in index_dict.values():
-                rng.shuffle(index_list)
+        # Shuffle the index - this means choosing different train/test sets for individual seeds
+        for index_list in index_dict.values():
+            rng.shuffle(index_list)
 
         # Count the number of "good," "bad," and "unlabeled" policies in training set (stratified)
         label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
-        upsampling_factor = int(label_counts_dict["bad"] / label_counts_dict["good"])
 
         # trim each list according to the requested number of samples and its own length
         if n_samples < self.total_samples:
             sample_frac = n_samples / self.total_samples
             for label in index_dict.keys():
                 if not (upsampling and label == "good"):  # TESTESTEST
-                    n_reduced = int(label_counts_dict[label] * sample_frac)
+                    n_reduced = round(label_counts_dict[label] * sample_frac)
                     index_dict[label] = index_dict[label][:n_reduced]
 
             # Recount needed after trimming
@@ -635,8 +639,9 @@ class CorpusProcessor:
             for _ in range(n_test_unlabeled):
                 test_start_positions.append(index_dict["unlabeled"].pop())
 
-        # oversample minority class (optional) # TESTESTEST
+        # oversample minority class (optional)
         if upsampling:
+            upsampling_factor = int(label_counts_dict["bad"] / label_counts_dict["good"])
             index_dict["good"] *= upsampling_factor
             rng.shuffle(index_dict["good"])
 
@@ -878,42 +883,6 @@ class CorpusProcessor:
             "10": "tenth",
         }
         return ordinals.get(number, number)
-
-    def save(self, fname: str = "corpus_processor"):
-        """
-        Save the CorpusProcessor instance to a file using pickle.
-
-        Parameters
-        ----------
-        file_path : str or Path
-            File path where the object will be saved.
-        """
-
-        fpath = self.save_dir_path / f"{fname}.pkl"
-        with open(fpath, "wb") as output_file:
-            pickle.dump(self, output_file)
-        logging.info(f"[CorpusProcessor.save] CorpusProcessor instance saved to {fpath}")
-
-    @classmethod
-    def load(cls, file_path):
-        """
-        Load a CorpusProcessor instance from a file.
-
-        Parameters
-        ----------
-        file_path : str or Path
-            File path from which the object will be loaded.
-
-        Returns
-        -------
-        CorpusProcessor
-            Loaded CorpusProcessor instance.
-        """
-
-        with open(file_path, "rb") as file:
-            loaded_instance = pickle.load(file)
-        logging.info(f"[CorpusProcessor.load] CorpusProcessor instance loaded from {file_path}")
-        return loaded_instance
 
 
 @dataclass

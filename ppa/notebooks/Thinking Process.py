@@ -14,6 +14,7 @@
 # ---
 
 # %% [markdown]
+# ### TODO: consider/checkout implementing use of `corpus_file`
 # ### TODO: try xgboost classification on the inferred training vectors (with feature selection) - I could use just D2VTransformer (Gensim) for this, attaching it to xgboost with sklearn in a pipeline
 # ### TODO: Compare calculating good/bad mean vectors according to model vectors vs. according to inferred vectors. Then, try training a single-tag ('unsupervised') Doc2Vec model, scoring according to inferred good/bad training labels (instead of the now non-existant good/bad model vectors) - is it better?
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
@@ -122,17 +123,16 @@ from ppa.processing import CorpusProcessor
 # SHOULD_REPROCESS = True
 SHOULD_REPROCESS = False
 
-MODEL_DIR_PATH = Path.cwd().parent / "models"
+CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
 if SHOULD_REPROCESS:
     # create a document processor with the paths
     cp = CorpusProcessor(
-        policy_paths,
-        MODEL_DIR_PATH,
-        seed=SEED,
+        CORPUS_DIR_PATH,
     )
     cp.process_corpus(
+        policy_paths,
         lemmatize=True,
         should_filter_stopwords=True,
         bigrams=True,
@@ -143,7 +143,8 @@ if SHOULD_REPROCESS:
         max_percentile=99,
     )
 else:
-    cp = CorpusProcessor.load(MODEL_DIR_PATH / "corpus_processor.pkl")
+    cp = CorpusProcessor(CORPUS_DIR_PATH)
+    print("Loaded existing CorpusProcessor")
 
 Beep(1000, 500)
 
@@ -155,7 +156,7 @@ Beep(1000, 500)
 
 # %%
 pp_lengths = np.array(
-    [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=5_000, shuffled=True)]
+    [len(tagged_doc.words) for tagged_doc in cp.generate_samples(n_samples=5_000)]
 )
 
 print(f"Sampled corpus of {pp_lengths.size:,} privacy policies.")
@@ -372,15 +373,8 @@ if SHOULD_REPROCESS:
 # Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
 
 # %%
-N = cp.total_samples
-TEST_FRAC = 0.2
-
 train_set, test_set = cp.generate_train_test_sets(
-    n_samples=N,
-    test_frac=TEST_FRAC,
-    labeled=False,
-    shuffled=True,
-    #     upsampling=True,
+    seed=SEED,
 )
 
 print("train_set: ", train_set)
@@ -409,7 +403,7 @@ if SHOULD_FIT_MODEL:
         window=5,
         negative=20,
         train_score=True,
-        random_state=cp.seed,
+        random_state=SEED,
         #     iterative_training=True,
         workers=psutil.cpu_count(logical=False) - 1,
     )
@@ -422,7 +416,11 @@ if SHOULD_FIT_MODEL:
 
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
-    classifier.save(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.pkl"))
+    classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.pkl"))
+
+# %%
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # Cross validate
@@ -430,7 +428,7 @@ if SHOULD_FIT_MODEL:
 # %% [markdown]
 # # TODO: <s>see if the attempt at using model vectors does about 0.75 in balanced accuracy (same as using inferred training vectors)?</s> YES! WITH EPOCHS=5 got ~0.76
 #
-# # TODO: CHECK THE SAME FOR UPSAMPLING
+# # TODO: <s>CHECK THE SAME FOR UPSAMPLING</s> - NOT HELPING - SAME PERFORMANCE (OR SLIGHTLY WORSE)
 
 # %%
 from sklearn.model_selection import cross_validate
@@ -438,9 +436,7 @@ from sklearn.model_selection import cross_validate
 N = cp.total_samples
 toy_train_set = cp.generate_samples(
     n_samples=N,
-    labeled=False,
-    shuffled=True,
-    upsampling=True,
+    seed=SEED,
 )
 print(Counter(toy_train_set.labels))
 
@@ -454,7 +450,7 @@ scores = cross_validate(
         vector_size=84,
         window=5,
         negative=20,
-        random_state=cp.seed,
+        random_state=SEED,
         #     workers=psutil.cpu_count(logical=False) - 1
     ),
     toy_train_set,
@@ -544,6 +540,8 @@ display(scores_df)
 
 # %%
 from gensim.models.doc2vec import Doc2Vec
+
+MODEL_DIR_PATH = Path.cwd().parent / "models"
 
 if not SHOULD_FIT_MODEL:
     classifier = D2VClassifier.load(MODEL_DIR_PATH / "pp_d2v.pkl")
@@ -763,7 +761,8 @@ from ppa.estimators import D2VTransformer, IsolationForest
 # from shutil import rmtree
 
 # load pretrained Doc2Vec model
-d2vtrans = D2VTransformer.load_model(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model")
+d2vtrans = D2VTransformer()
+d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
 # transform the train_set using d2vtrabs
 train_set_vec = d2vtrans.model.dv.vectors
@@ -813,7 +812,7 @@ search = GridSearchCV(
     estimator=pipe,
     param_grid=param_dist,
     verbose=4,
-    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
+    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED),
     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
     refit=True,
 )
@@ -857,10 +856,6 @@ test_set_labeled_vec = d2vtrans.transform(test_set_labeled)
 
 # predict using transformed test_set_vec
 pipe.score(test_set_labeled_vec, test_set_labeled.labels)
-
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 7 Considering Upsampling and Pseudo-Labeling
@@ -1014,48 +1009,6 @@ print(
 
 # %% [markdown]
 # ## 7.2 Upsampling
-# Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set:
-
-# %% [markdown]
-# # TODO: RUN THIS WITH CV, SEE IF DOES BETTER THAN ABOUT 0.75 IN BALANCED ACC.
-
-# %%
-from sklearn.model_selection import cross_validate
-
-SHOULD_FIT_UPSAMPLED_MODEL = True
-# SHOULD_FIT_UPSAMPLED_MODEL = False
-
-if SHOULD_FIT_UPSAMPLED_MODEL:
-
-    # create train/test split with upsampling in training set
-    upsampled_train_set = cp.generate_samples(
-        n_samples=cp.total_samples,
-        shuffled=True,
-        upsampling=True,
-    )
-    print("upsampled_train_set: ", upsampled_train_set)
-
-    CV = 4
-
-    tic = time.perf_counter()
-    logging.info("Starting CV...")
-    scores = cross_validate(
-        D2VClassifier(
-            epochs=15,
-            vector_size=84,  # 84?
-            window=5,
-            negative=20,
-            train_score=True,
-            random_state=cp.seed,
-        ),
-        upsampled_train_set,
-        upsampled_train_set.labels,
-        cv=CV,
-        #     return_train_score=True,
-        verbose=10,
-        n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-    )
-    logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-    print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
-    scores_df = pd.DataFrame(scores)
-    display(scores_df)
+# Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set.
+#
+# # NOTE - This does not help accoring to CV

@@ -12,6 +12,9 @@ logs/
 # model folder
 models/
 
+# corpus folder
+corpus/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

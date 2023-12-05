@@ -1,5 +1,4 @@
 import logging
-import pickle
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, cast
@@ -150,10 +149,6 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
             Instance of the fitted classifier.
         """
 
-        # save the training data generator if one is supplied
-        if isinstance(X, SampleGenerator):
-            self.train_set = X
-
         # Initialize both models
         self.model = Doc2Vec(
             vector_size=self.vector_size,
@@ -279,7 +274,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
 
         return sorted_rank_counts
 
-    def save(self, filepath: Path):
+    def save_model(self, filepath: Path) -> None:
         """
         Save the trained Doc2Vec model.
 
@@ -290,52 +285,18 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         """
 
         # saving the model
-        model_path = str(filepath.with_suffix(".model"))
-        self.model.save(model_path)
+        self.model.save(str(filepath))
         logging.info(
-            f"[{self.__class__.__name__}.save_model] Doc2Vec model successfully saved to {model_path}."
+            f"[{self.__class__.__name__}.save_model] Doc2Vec model successfully saved to {filepath}."
         )
 
-        # saving the estimator
-        del self.model
-        with open(filepath, "wb") as file:
-            pickle.dump(self, file)
+    def load_model(self, filepath: Path):
+        """Doc."""
 
-        # reload the model after saving the estimator without it
-        self.model = Doc2Vec.load(model_path)
+        self.model = Doc2Vec.load(str(filepath))
         logging.info(
-            f"[{self.__class__.__name__}.save_model] {self.__class__.__name__} successfully saved to {filepath}."
+            f"[{self.__class__.__name__}.load_model] Doc2Vec model successfully loaded from {filepath}."
         )
-
-    @classmethod
-    def load(cls, filepath: Path):
-        """
-        Load a trained Doc2Vec model and return an instance of the D2VTransformer.
-
-        Parameters
-        ----------
-        filepath : str
-            Filepath to load the model from.
-
-        Returns
-        -------
-        D2VTransformer
-            Instance of D2VTransformer with the loaded model.
-        """
-
-        # load estimator
-        with open(filepath, "rb") as file:
-            instance = pickle.load(file)
-
-        # load model
-        model_path = str(filepath.with_suffix(".model"))
-        instance.model = Doc2Vec.load(model_path)
-        logging.info(
-            f"[{cls.__class__.__name__}.load] {cls.__class__.__name__} (and Doc2Vec model) successfully loaded from {filepath}."
-        )
-        logging.info(f"{dir(cls)}")  # TESTESTEST
-
-        return instance
 
 
 class D2VClassifier(D2VTransformer):
@@ -463,14 +424,16 @@ class D2VClassifier(D2VTransformer):
         #        bad_idxs = y_arr == 1
         #        # trasform them separately
         #        try:
-        #            X_good: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+        #            X = cast(SampleGenerator, X)
+        #            X_good: SampleGenerator | List[TaggedDocument] = X.sample(
         #                idxs=np.nonzero(good_idxs)[0]
         #            )
-        #            X_bad: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+        #            X_bad: SampleGenerator | List[TaggedDocument] = X.sample(
         #                idxs=np.nonzero(bad_idxs)[0]
         #            )
         #        except AttributeError:
         #            # X is a list
+        #            X = cast(List[TaggedDocument], X)
         #            X_good = [X[idx] for idx in np.nonzero(good_idxs)[0]]
         #            X_bad = [X[idx] for idx in np.nonzero(bad_idxs)[0]]
         #        mean_good = self.transform(X_good).mean(axis=0)

@@ -14,7 +14,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Callable, List
 from winsound import Beep
 
-import numpy as np
 import yaml  # type: ignore
 
 
@@ -26,7 +25,6 @@ class IndexedFile:
 
     fpath: Path
     mode: str
-    rng: np.random.Generator = None
     start_pos_list: List[int] = field(default_factory=list)
     index_suffix: InitVar[str] = "_idx"
 

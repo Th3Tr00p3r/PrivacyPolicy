@@ -1,7 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
-#     formats: py:percent,ipynb
+#     formats: ipynb,py:percent
 #     text_representation:
 #       extension: .py
 #       format_name: percent
@@ -383,10 +383,8 @@ train_set, test_set = cp.generate_train_test_sets(
     #     upsampling=True,
 )
 
-print(Counter(train_set.labels))
-print(Counter(test_set.labels))
-
-Beep(1000, 500)
+print("train_set: ", train_set)
+print("test_set: ", test_set)
 
 # %% [markdown]
 # ## 4.1 Model Training and Optimization
@@ -406,11 +404,11 @@ SHOULD_FIT_MODEL = True
 if SHOULD_FIT_MODEL:
     # initialize classifier
     classifier = D2VClassifier(
-        epochs=15,
+        epochs=5,
         vector_size=84,  # 84?
         window=5,
         negative=20,
-        #         train_score=True,
+        train_score=True,
         random_state=cp.seed,
         #     iterative_training=True,
         workers=psutil.cpu_count(logical=False) - 1,
@@ -424,24 +422,25 @@ if SHOULD_FIT_MODEL:
 
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
-    classifier.model.save(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model")
-
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
+    classifier.save(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.pkl"))
 
 # %% [markdown]
 # Cross validate
 
+# %% [markdown]
+# # TODO: <s>see if the attempt at using model vectors does about 0.75 in balanced accuracy (same as using inferred training vectors)?</s> YES! WITH EPOCHS=5
+#
+# # TODO: CHECK THE SAME FOR UPSAMPLING
+
 # %%
 from sklearn.model_selection import cross_validate
 
-N = cp.total_samples // 10
+N = cp.total_samples
 toy_train_set = cp.generate_samples(
     n_samples=N,
     labeled=False,
     shuffled=True,
-    #     upsampling=True,
+    upsampling=True,
 )
 print(Counter(toy_train_set.labels))
 
@@ -451,7 +450,7 @@ tic = time.perf_counter()
 logging.info("Starting CV...")
 scores = cross_validate(
     D2VClassifier(
-        epochs=1,
+        epochs=5,
         vector_size=84,
         window=5,
         negative=20,
@@ -474,71 +473,71 @@ display(scores_df)
 # Perform search to find best set of hyperparameters
 
 # %%
-from sklearn.experimental import enable_halving_search_cv  # noqa
-from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
-from scipy.stats import randint, uniform
+# from sklearn.experimental import enable_halving_search_cv  # noqa
+# from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
+# from scipy.stats import randint, uniform
 
-# Create a larger parameter grid with more combinations
-param_dist = {
-    "epochs": [1],
-    #     "vector_size": [74, 100, 154],
-    #     "window": [5, 7, 9],
-    #     "negative": [5, 10, 20],
-}
+# # Create a larger parameter grid with more combinations
+# param_dist = {
+#     "epochs": [1],
+#     #     "vector_size": [74, 100, 154],
+#     #     "window": [5, 7, 9],
+#     #     "negative": [5, 10, 20],
+# }
 
-N_SPLITS = 2
-HRS_SEED = randint(0, 2**32).rvs()
+# N_SPLITS = 2
+# HRS_SEED = randint(0, 2**32).rvs()
 
-# Update the hyperparameter search to use the pipeline
-search = GridSearchCV(
-    estimator=D2VClassifier(
-        epochs=1,
-        vector_size=84,
-        window=5,
-        negative=20,
-        random_state=cp.seed,
-        #         workers=psutil.cpu_count(logical=False) - 1,
-    ),
-    #     param_distributions=param_dist,
-    param_grid=param_dist,
-    #     n_candidates="exhaust",
-    verbose=4,
-    #     random_state=HRS_SEED,
-    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
-    #     min_resources=15000,
-    #     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
-    refit=False,
-)
+# # Update the hyperparameter search to use the pipeline
+# search = GridSearchCV(
+#     estimator=D2VClassifier(
+#         epochs=1,
+#         vector_size=84,
+#         window=5,
+#         negative=20,
+#         random_state=cp.seed,
+#         #         workers=psutil.cpu_count(logical=False) - 1,
+#     ),
+#     #     param_distributions=param_dist,
+#     param_grid=param_dist,
+#     #     n_candidates="exhaust",
+#     verbose=4,
+#     #     random_state=HRS_SEED,
+#     cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
+#     #     min_resources=15000,
+#     #     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+#     refit=False,
+# )
 
-# Fit the hyperparameter search on your training data
-tic = time.perf_counter()
-logging.info("Starting search...")
-search.fit(toy_train_set, toy_train_set.labels)
-logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# # Fit the hyperparameter search on your training data
+# tic = time.perf_counter()
+# logging.info("Starting search...")
+# search.fit(toy_train_set, toy_train_set.labels)
+# logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
 
-# Print the best hyperparameters
-logging.info(f"Best Hyperparameters: {search.best_params_}")
+# # Print the best hyperparameters
+# logging.info(f"Best Hyperparameters: {search.best_params_}")
 
-# display the entire CV results, too
-display(pd.DataFrame(search.cv_results_))
+# # display the entire CV results, too
+# display(pd.DataFrame(search.cv_results_))
 
-# Beep when search is done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# # Beep when search is done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
-# Refit the model using the best found hyperparameters, with multiprocessing
-best_model = D2VClassifier(
-    **search.best_params_,
-    random_state=cp.seed,
-    workers=psutil.cpu_count(logical=False) - 1,
-)
-best_model.fit(train_set, train_set.labels)
+# # Refit the model using the best found hyperparameters, with multiprocessing
+# best_model = D2VClassifier(
+#     **search.best_params_,
+#     random_state=cp.seed,
+#     workers=psutil.cpu_count(logical=False) - 1,
+# )
+# best_model.fit(train_set, train_set.labels)
 
-# Get the score of the best model on the test set
-best_model_score = best_model.score(test_set, test_set.labels)
-logging.info("Best Model Score:", best_model_score)
+# # Get the score of the best model on the test set
+# best_model_score = best_model.score(test_set, test_set.labels)
+# logging.info("Best Model Score:", best_model_score)
 
-# Beep again when best model is ready
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# # Beep again when best model is ready
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # Load existing model to estimator
@@ -547,18 +546,15 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 from gensim.models.doc2vec import Doc2Vec
 
 if not SHOULD_FIT_MODEL:
-    classifier = D2VClassifier(
-        random_state=cp.seed,
-    )
-
-    model_fname = f"pp_d2v.model"
-    classifier.model = Doc2Vec.load(f"D:/MEGA/Programming/ML/PPA/ppa/models/{model_fname}")
+    classifier = D2VClassifier.load(MODEL_DIR_PATH / "pp_d2v.pkl")
 
     # score the model
     print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
 
     # Beep when done
     Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+else:
+    print("Using recently fitted model.")
 
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
@@ -741,7 +737,7 @@ with Plotter(
     ax.legend(title="Letter (Num.)")
 
 # %% [markdown]
-# We can see that all but the 'E'-rated policies have some tail in the high-scores, and even more disturbing is the fact that most 'A'-rated policies have fairly low scores!
+# We can see that all but the 'E'-rated policies have some tail in the high-scores! Furthermore, many 'A' and 'B'-rated policies have fairly low scores!
 
 # %% [markdown]
 # One solution for this could be simply wrong labels. Let's check out the worst-scored "good" policies. Since there are so little labeled policies in thee test set, we can check them all out together in one table:
@@ -750,10 +746,124 @@ with Plotter(
 df[df["label"] == "good"].sort_values(by="score")
 
 # %% [markdown]
-# Since I recognize some of the URLs as having legitimately "good" privacy policies, and the worst scored one is that of Vancouver's public library, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
+# Since I recognize some of the URLs as having legitimately "good" privacy policies, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
 
 # %% [markdown]
-# # 6 Considering Upsampling and Pseudo-Labeling
+# # 6. Attaching a Classifier
+# While it seems that the Doc2Vec model by itself is doing a fair job separating good privacy policies from bad ones, I am almost certain that more complex classification methods could make better use of the generated the vector embeddings as features for a binary classifier. Since I already have an transformer class for Doc2Vec, it should have been relatively easy to create a pipeline and attach an existing classifier.
+
+# %% [markdown]
+# Let's start by creating a simple pipeline, see if t works at all and go from there. we can start by using the already trained mode (should be refitted when searching for optimal hyperparameters)
+
+# %%
+from sklearn.pipeline import Pipeline
+from ppa.estimators import D2VTransformer, IsolationForest
+
+# from tempfile import mkdtemp
+# from shutil import rmtree
+
+# load pretrained Doc2Vec model
+d2vtrans = D2VTransformer.load_model(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model")
+
+# transform the train_set using d2vtrabs
+train_set_vec = d2vtrans.model.dv.vectors
+# train_set_vec = d2vtrans.transform(train_set)
+
+# # create cache tempdir for caching fitted transformers
+# cachedir = mkdtemp()
+
+# create a pipeline
+pipe = Pipeline(
+    [
+        (
+            "clf",
+            IsolationForest(
+                n_estimators=50,
+                n_jobs=psutil.cpu_count(logical=False) - 1,
+            ),
+        )
+    ],
+    #     memory=cachedir,
+)
+
+# fit it to the pre-transformed train_set_vec
+pipe.fit(train_set_vec)
+
+# # Clear the cache directory when you don't need it anymore
+# rmtree(cachedir)
+
+# %%
+from sklearn.experimental import enable_halving_search_cv  # noqa
+from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
+from scipy.stats import randint, uniform
+
+# Create a larger parameter grid with more combinations
+param_dist = {
+    "n_estimators": [20, 50, 100, 200, 300, 500],
+    "max_samples": ["auto", 0.001, 0.01, 0.1],
+    "contamination": ["auto", 0.01, 0.05, 0.1],
+    "max_features": [1.0, 0.75, 0.5],
+    "bootstrap": [True, False],
+}
+
+N_SPLITS = 4
+
+# Update the hyperparameter search to use the pipeline
+search = GridSearchCV(
+    estimator=pipe,
+    param_grid=param_dist,
+    verbose=4,
+    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=cp.seed),
+    n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+    refit=True,
+)
+
+# Fit the hyperparameter search on your training data
+tic = time.perf_counter()
+logging.info("Starting search...")
+search.fit(train_set_vec, train_set.labels)
+logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+# Print the best hyperparameters
+logging.info(f"Best Hyperparameters: {search.best_params_}")
+
+# display the entire CV results, too
+display(pd.DataFrame(search.cv_results_))
+
+# Beep when search is done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# transform test_set using pretrained Doc2Vec
+test_set_labeled, _ = test_set.get_labeled()
+test_set_labeled_vec = d2vtrans.transform(test_set_labeled)
+
+# Get the score of the best model on the test set
+best_model_score = search.best_model.score(test_set_labeled_vec, test_set_labeled.labels)
+logging.info("Best Model Score:", best_model_score)
+
+# Beep again when best model is ready
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %%
+train_set_vec.shape
+
+# %%
+len(train_set.labels)
+
+# %%
+# transform test_set using pretrained Doc2Vec
+test_set_labeled, _ = test_set.get_labeled()
+test_set_labeled_vec = d2vtrans.transform(test_set_labeled)
+
+# predict using transformed test_set_vec
+pipe.score(test_set_labeled_vec, test_set_labeled.labels)
+
+# %%
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
+
+# %% [markdown]
+# # 7 Considering Upsampling and Pseudo-Labeling
 #
 # Being unable to increase my model's balanced-accuracy metric above about 0.8 using hyperparameter tuning or better data pre-processing (I have tinkered with both for a while now). What could be the reason is the imbalance existing in the data - there are about 17 times more "bad" labels than "good" ones, and I expect about the same imbalance in the unlabeled corpus. I can attempt to improve the data in two (possibly combined) methods:
 # * **Upsampling (mixing-in copies of) "good"-labeled policies in the training data**: This might make the model 'understand' "good" policies better, as the data will be less biased (need to watch for overfitting of the "good" policies)
@@ -762,44 +872,12 @@ df[df["label"] == "good"].sort_values(by="score")
 # If upsampling appears to be improving the metric, I could iteratively label more polcies (good & bad) and upsample further, as long as things keep improving.
 
 # %% [markdown]
-# ## 6.1 Pseudo-Labeling
+# ## 7.1 Pseudo-Labeling
 #
-# ### 6.1.1 Score Thresholds
+# ### 7.1.1 Score Thresholds
 # First, let's see how many candidates I have for pseudo-labeling. Taking a look again at the histograms in [5.3](#sec-5-3), I can "safely" set the thresholds at below 0.46 for "bad" policies and above 0.55 for "good" policies. Let's see how many new labeles I would be able to obtain this way. Let's try plotting the score distributions for the training set.
 #
-# <!--
-# We begin by getting the scores for the training set vectors, which are essentially the model's 'document vectors' (no need to infer):
-# # TODO: instead of iterating over the disk-bound corpus for getting merely the relevant URLs, use the index file!
-# # TODO: Figure out why I get normal-like distributions for all classes (good, bad, unlabeled) when using the model vectors instead of inferred vectors
-#
-# CODE (for using model's 'document vectors' instead of inference):
-# # convet labeles to an array and keep only "good"/"bad" elements, and their indices
-# train_labels, labeled_train_idxs = classifier.valid_labels(train_set.labels)
-#
-# # get the labeled/unlabeled training set
-# train_set_labeled = train_set.sample(idxs=np.nonzero(labeled_train_idxs)[0])
-# train_set_unlabeled = train_set.sample(idxs=np.nonzero(~labeled_train_idxs)[0])
-#
-# # Get transformed train set (labeled)
-# train_vec_labeled = np.empty((len(train_set_labeled), classifier.model.vector_size))
-# for idx, td in enumerate(train_set_labeled):
-#     train_vec_labeled[idx] = classifier.model.dv[td.tags[0]]
-#
-# # Get transformed train set (unlabeled)
-# train_vec_unlabeled = np.empty((len(train_set_unlabeled), classifier.model.vector_size))
-# for idx, td in enumerate(train_set_unlabeled):
-#     train_vec_unlabeled[idx] = classifier.model.dv[td.tags[0]]
-#
-# # get the scores
-# y_train_scores_labeled = classifier.decision_function(X_vec=train_vec_labeled)
-# y_train_scores_unlabeled = classifier.decision_function(X_vec=train_vec_unlabeled)
-#
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-#
-# -->
-#
-# We begin by inferring vectors for all training policies and getting the scores (THIS MIGHT TAKE A WHILE!):
+# We begin by inferring vectors for all training policies and getting the scores (this might take couple of minutes):
 
 # %%
 # get indices for labeled training samples
@@ -810,7 +888,7 @@ y_train_scores_labeled = classifier.decision_function(
     train_set.sample(idxs=np.nonzero(labeled_train_idxs)[0])
 )
 y_train_scores_unlabeled_sample = classifier.decision_function(
-    train_set.sample(1_000, idxs=np.nonzero(~labeled_train_idxs)[0])
+    train_set.sample(5_000, idxs=np.nonzero(~labeled_train_idxs)[0])
 )
 
 # Beep when done
@@ -854,82 +932,37 @@ with Plotter(
 # %% [markdown]
 # Reassuringly, the distributions look similar to the test distributions ([5.3](#sec-5-3)).
 #
-# Now, let's count how many new good/bad pseudo-labeled policies we can hope for, in a preliminary iteration. For this, we need to get the scores for the entire unlabeled training corpus (for displaying the distribution, only a small sample was used):
-
-# %%
-y_train_scores_unlabeled = classifier.decision_function(
-    train_set.sample(idxs=np.nonzero(~labeled_train_idxs)[0])
-)
-
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
-
-# %% [markdown]
+# Now, let's estimate how many new good/bad pseudo-labeled policies we can hope for, in a preliminary iteration. For this, we can just use the sample we just inferred for the above plot, and divide it by the sampling ratio.
+#
 # Now let's set the thresholds to "safe" values according to the "good"/"bad" distributions above:
 
 # %%
 print(
-    f"Unlabeled score range: {min(y_train_scores_unlabeled):.2f}-{max(y_train_scores_unlabeled):.2f}"
+    f"Unlabeled score range: {min(y_train_scores_unlabeled_sample):.2f}-{max(y_train_scores_unlabeled_sample):.2f}"
 )
 
-THRESH_GOOD = 0.55
+THRESH_GOOD = 0.56
 THRESH_BAD = 0.44
 
-print("Potential 'good' pseudo-labels: ", sum(y_train_scores_unlabeled > THRESH_GOOD))
-print("Potential 'bad' pseudo-labels: ", sum(y_train_scores_unlabeled < THRESH_BAD))
+sampling_ratio = y_train_scores_unlabeled_sample.size / len(train_set)
+
+print(
+    f"Potential 'good' pseudo-labels estimate: {sum(y_train_scores_unlabeled_sample > THRESH_GOOD) / sampling_ratio:.0f}"
+)
+print(
+    f"Potential 'bad' pseudo-labels estimate: {sum(y_train_scores_unlabeled_sample < THRESH_BAD) / sampling_ratio:.0f}"
+)
 
 # %% [markdown]
-# It appears that we can barely squeeze out about 20 new "good" labels...
+# So it appears we can squeeze out more labeles if necessary, but it remains to be seen how accurate they will be.
 
 # %% [markdown]
-# ### 6.1.2 Most-Similar Labeled Policies
+# ### 7.1.2 Most-Similar Labeled Policies
 #
 # A different Idea, utilizing Doc2Vec's prized similarity methods, could be checking out the most similar labeled policies for each unlabeled policy - the general idea is that if for a specific unlabeled policiy, the N most similar labeled documents are of a specific label (and above a certain similarity score), we could label it the same. We should try it out with a small sample of unlabeld policies first:
 
 # %% [markdown]
-# # TODO: TRY THIS
-
-# %%
-
-# %% [markdown]
-# Let's try improving the model with upsampling first.
-
-# %% [markdown]
-# ## 6.2 Upsampling
-# Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have (NOT YET) added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set:
-# # TODO: IMPLEMENT UPSAMPLING
-
-# %%
-# classifier.score(toy_test_set, toy_test_set.labels, threshold=0.492)
-
-# %%
-# BEST PARAMS SO FAR:
-
-# {
-#     'dm': 1,
-#     'epochs': 17,
-#     'hs': 1,
-#     'min_count': 0,
-#     'negative': 0.0,
-#     'prob_threshold': 0.5,
-#     'random_state': 42,
-#     'sample': 0.0,
-#     'train_score': False,
-#     'vector_size': 682,
-#     'window': 8,
-# }
-
-# %% [markdown]
-# # 6. Attaching a Classifier
-# It seems that the Doc2Vec model by itself is not doing a good job separating good privacy policies from bad ones. I can try using the vector embeddings as features for a binary classifier. Since I already have an classifier class for Doc2Vec, it should have been relatively easy to create a pipeline and attach more estimators. Unfortunately, since sklearn.pipeline.Pipeline doens't transform y (targets/labels) during fitting, I would have to implement a custom classifier combining Doc2Vec with an unsupervised classifier.
-
-# %% [markdown]
-# # Visualize the decision boundary in 2D
-
-# %%
-
-# %% [markdown]
-# # Label test policies according to nearest labeld policy from training coprus - check this out if classification using the available true labels is insufficient
+# # TODO: TRY THIS (below is old code for a starting point/idea)
 
 # %%
 # from gensim.models import Doc2Vec
@@ -975,3 +1008,54 @@ print("Potential 'bad' pseudo-labels: ", sum(y_train_scores_unlabeled < THRESH_B
 #     default_label = nearest_labels[0]
 
 # print("Predicted Label:", default_label)
+
+# %% [markdown]
+# Let's try improving the model with upsampling first.
+
+# %% [markdown]
+# ## 7.2 Upsampling
+# Before pseudo-labeling, let's try the more simple upsampling technique, and see if we can get a better model before scraping for more labels. I have added a feature which allows all samples of a certain label ("good", in this case) to repeat `upsampling_factor` times in SampleGenerator iterations. Let's try refitting the model with the upsampled training corpus, and see if it scores better on the test set:
+
+# %% [markdown]
+# # TODO: RUN THIS WITH CV, SEE IF DOES BETTER THAN ABOUT 0.75 IN BALANCED ACC.
+
+# %%
+from sklearn.model_selection import cross_validate
+
+SHOULD_FIT_UPSAMPLED_MODEL = True
+# SHOULD_FIT_UPSAMPLED_MODEL = False
+
+if SHOULD_FIT_UPSAMPLED_MODEL:
+
+    # create train/test split with upsampling in training set
+    upsampled_train_set = cp.generate_samples(
+        n_samples=cp.total_samples,
+        shuffled=True,
+        upsampling=True,
+    )
+    print("upsampled_train_set: ", upsampled_train_set)
+
+    CV = 4
+
+    tic = time.perf_counter()
+    logging.info("Starting CV...")
+    scores = cross_validate(
+        D2VClassifier(
+            epochs=15,
+            vector_size=84,  # 84?
+            window=5,
+            negative=20,
+            train_score=True,
+            random_state=cp.seed,
+        ),
+        upsampled_train_set,
+        upsampled_train_set.labels,
+        cv=CV,
+        #     return_train_score=True,
+        verbose=10,
+        n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+    )
+    logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+    print("np.nanmean(scores['test_score']): ", np.nanmean(scores["test_score"]))
+    scores_df = pd.DataFrame(scores)
+    display(scores_df)

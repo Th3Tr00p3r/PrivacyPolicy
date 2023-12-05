@@ -3,10 +3,11 @@ import logging
 import logging.config
 import pickle
 import re
+from collections import Counter
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from winsound import Beep
 
 import aiofiles  # type: ignore
@@ -45,8 +46,6 @@ class SampleGenerator:
         Path to the data file.
     start_pos_list : List[int]
         List of starting positions in the file for sampling.
-    index_suffix : str, optional
-        Suffix for the index, by default "_idx".
     rng : np.random.Generator, optional
         Random number generator, by default np.random.default_rng().
     text_only : bool, optional
@@ -55,15 +54,14 @@ class SampleGenerator:
 
     fpath: Path
     start_pos_list: List[int]
-    labeled: bool
-    index_suffix: str = "_idx"
+    labeled: bool = False
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
     text_only: bool = False
 
     @property
     def labels(self) -> List[str]:
         """
-        Retrieve labels corresponding to the samples.
+        Retrieve labels sorted in the sample order.
 
         Returns
         -------
@@ -71,7 +69,20 @@ class SampleGenerator:
             List of labels.
         """
 
-        return self._labels or self._get_labels()
+        return self._labels or self._get_keys_and_labels()[1]
+
+    @property
+    def keys(self) -> List[str]:
+        """
+        Retrieve keys sorted in the sample order.
+
+        Returns
+        -------
+        List[str]
+            List of labels.
+        """
+
+        return self._keys or self._get_keys_and_labels()[0]
 
     def __post_init__(self) -> None:
         """
@@ -81,9 +92,7 @@ class SampleGenerator:
         self.indexed_file = IndexedFile(
             self.fpath,
             "read",
-            self.rng,
             self.start_pos_list,
-            self.index_suffix,
         )
         self._labels: List[str] = []
 
@@ -96,8 +105,8 @@ class SampleGenerator:
         str
             String representation.
         """
-
-        return f"SampleGenerator({len(self):,} `TaggedDocument` objects, fpath={self.fpath})"
+        counter_str = ", ".join([f"{k}: {v:,}" for k, v in Counter(self.labels).items()])
+        return f"SampleGenerator({len(self):,} `TaggedDocument` objects ({counter_str}), fpath={self.fpath})"
 
     def sample(self, n: int = None, idxs: List[int] | np.ndarray = None) -> "SampleGenerator":
         """
@@ -127,10 +136,17 @@ class SampleGenerator:
             self.fpath,
             start_pos_list,
             self.labeled,
-            self.index_suffix,
             self.rng,
             self.text_only,
         )
+
+    def get_labeled(self) -> Tuple["SampleGenerator", np.ndarray]:
+        """Doc."""
+
+        labeled_idxs = [
+            self.index(key) for key, label in zip(self.keys, self.labels) if label != "unlabeled"
+        ]
+        return self.sample(idxs=labeled_idxs), labeled_idxs
 
     def __iter__(self) -> TaggedDocument:
         """
@@ -215,7 +231,7 @@ class SampleGenerator:
                 len_ += 1
             return len_
 
-    def _get_labels(self) -> List[str]:
+    def _get_keys_and_labels(self) -> Tuple[List[str], List[str]]:
         """
         Retrieve labels corresponding to the labels index.
 
@@ -225,19 +241,14 @@ class SampleGenerator:
             List of labels.
         """
 
-        pos2label = {}
+        pos2keylabel = {}
         with open(self.indexed_file.idx_fpath, "r") as label_idx_file:
             for line in label_idx_file:
-                pos, _, label = json.loads(line.strip())
-                pos2label[pos] = label
+                pos, key, label = json.loads(line.strip())
+                pos2keylabel[pos] = key, label
 
-        self._labels = [pos2label[pos] for pos in self.start_pos_list]
-        return self._labels
-
-    def to_list(self):
-        """Doc."""
-
-        return list(self)
+        self._keys, self._labels = zip(*[pos2keylabel[pos] for pos in self.start_pos_list])
+        return self._keys, self._labels
 
 
 @dataclass
@@ -261,9 +272,6 @@ class CorpusProcessor:
         # file paths:
         self.dict_path = self.save_dir_path / "dictionary.pkl"
         self.corpus_path = self.save_dir_path / "corpus.json"
-
-        # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
-        self.rng = np.random.default_rng(self.seed)
 
     def __repr__(self):
         """
@@ -541,11 +549,10 @@ class CorpusProcessor:
         self,
         fpath: Path = None,
         test_frac: float = 0.2,
-        labeled=False,
-        shuffled=False,
+        shuffled: bool = False,
         n_samples: int = None,
-        text_only: bool = False,
         upsampling: bool = False,  # TESTESTEST
+        **kwargs,
     ):
         """
         Generate training and testing sets from the corpus.
@@ -571,113 +578,93 @@ class CorpusProcessor:
             Training and testing sample generators.
         """
 
+        # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
+        rng = np.random.default_rng(self.seed)
+
         fpath = fpath or self.corpus_path
 
         file_idx_path = get_file_index_path(fpath)
 
         n_samples = n_samples or self.total_samples
 
-        if labeled:
-            # Sort the index into a dictionary
-            index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
-            with open(file_idx_path, "r") as idx_file:
-                while True:
-                    try:
-                        start_pos, _, label = json.loads(idx_file.readline())
-                        label = label or "unlabeled"  # treat None as unlabeled
-                        index_dict[label].append(start_pos)
-                    except json.JSONDecodeError:
-                        break
+        # Sort the index into a dictionary
+        index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
+        with open(file_idx_path, "r") as idx_file:
+            while True:
+                try:
+                    start_pos, _, label = json.loads(idx_file.readline())
+                    label = label or "unlabeled"  # treat None as unlabeled
+                    index_dict[label].append(start_pos)
+                except json.JSONDecodeError:
+                    break
 
-            # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled:
-                for index_list in index_dict.values():
-                    self.rng.shuffle(index_list)
+        # Shuffle the index (optional) - this means choosing different train/test sets
+        if shuffled:
+            for index_list in index_dict.values():
+                rng.shuffle(index_list)
 
-            # Count the number of "good," "bad," and "unlabeled" policies in training set (stratified)
+        # Count the number of "good," "bad," and "unlabeled" policies in training set (stratified)
+        label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+        upsampling_factor = int(label_counts_dict["bad"] / label_counts_dict["good"])
+
+        # trim each list according to the requested number of samples and its own length
+        if n_samples < self.total_samples:
+            sample_frac = n_samples / self.total_samples
+            for label in index_dict.keys():
+                if not (upsampling and label == "good"):  # TESTESTEST
+                    n_reduced = int(label_counts_dict[label] * sample_frac)
+                    index_dict[label] = index_dict[label][:n_reduced]
+
+            # Recount needed after trimming
             label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
-            upsampling_factor = int(label_counts_dict["bad"] / label_counts_dict["good"])
 
-            # trim each list according to the requested number of samples and its own length
+        # Collect test set file index (optional)
+        test_start_positions = []
+        if test_frac:
+            n_test_good = int(label_counts_dict["good"] * test_frac)
+            if not n_test_good:
+                raise RuntimeError("No 'good' samples in the test set - check your data!")
+            n_test_bad = int(label_counts_dict["bad"] * test_frac)
+            n_test_unlabeled = int(label_counts_dict["unlabeled"] * test_frac)
+
+            # Collect test set file index
+            for _ in range(n_test_good):
+                test_start_positions.append(index_dict["good"].pop())
+            for _ in range(n_test_bad):
+                test_start_positions.append(index_dict["bad"].pop())
+            for _ in range(n_test_unlabeled):
+                test_start_positions.append(index_dict["unlabeled"].pop())
+
+        # oversample minority class (optional) # TESTESTEST
+        if upsampling:
+            index_dict["good"] *= upsampling_factor
+            rng.shuffle(index_dict["good"])
+
+            # trim good list AFTER upsampling (if relevant)
             if n_samples < self.total_samples:
-                sample_frac = n_samples / self.total_samples
-                for label in index_dict.keys():
-                    if not (upsampling and label == "good"):  # TESTESTEST
-                        n_reduced = int(label_counts_dict[label] * sample_frac)
-                        index_dict[label] = index_dict[label][:n_reduced]
+                n_reduced = int(len(index_dict["good"]) * sample_frac)
+                index_dict["good"] = index_dict["good"][:n_reduced]
 
-                # Recount needed after trimming
-                label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
+        # use the rest as training set file index
+        train_start_positions = index_dict["good"] + index_dict["bad"] + index_dict["unlabeled"]
 
-            # Collect test set file index (optional)
-            test_start_positions = []
-            if test_frac:
-                n_test_good = int(label_counts_dict["good"] * test_frac)
-                if not n_test_good:
-                    raise RuntimeError("No 'good' samples in the test set - check your data!")
-                n_test_bad = int(label_counts_dict["bad"] * test_frac)
-                n_test_unlabeled = int(label_counts_dict["unlabeled"] * test_frac)
-
-                # Collect test set file index
-                for _ in range(n_test_good):
-                    test_start_positions.append(index_dict["good"].pop())
-                for _ in range(n_test_bad):
-                    test_start_positions.append(index_dict["bad"].pop())
-                for _ in range(n_test_unlabeled):
-                    test_start_positions.append(index_dict["unlabeled"].pop())
-
-            # oversample minority class (optional) # TESTESTEST
-            if upsampling:
-                index_dict["good"] *= upsampling_factor
-                self.rng.shuffle(index_dict["good"])
-
-                # trim good list AFTER upsampling (if relevant)
-                if n_samples < self.total_samples:
-                    n_reduced = int(len(index_dict["good"]) * sample_frac)
-                    index_dict["good"] = index_dict["good"][:n_reduced]
-
-            # use the rest as training set file index
-            train_start_positions = index_dict["good"] + index_dict["bad"] + index_dict["unlabeled"]
-
-            # Shuffle again so that labeled samples are mixed in with the unlabeled samples
-            self.rng.shuffle(train_start_positions)
-            self.rng.shuffle(test_start_positions)
-
-        # all unlabeled
-        else:
-            # Get the entire file index as a list
-            index_list = []
-            with open(file_idx_path, "r") as idx_file:
-                while True:
-                    try:
-                        start_pos, *_ = json.loads(idx_file.readline())
-                        index_list.append(start_pos)
-                    except json.JSONDecodeError:
-                        break
-
-            # Shuffle the index (optional) - this means choosing different train/test sets
-            if shuffled:
-                self.rng.shuffle(index_list)
-
-            # create train/test file indices
-            n_train = int(n_samples * (1 - test_frac))
-            train_start_positions = index_list[:n_train]
-            test_start_positions = index_list[n_train:n_samples]
+        # Shuffle again so that labeled samples are mixed in with the unlabeled samples
+        rng.shuffle(train_start_positions)
+        rng.shuffle(test_start_positions)
 
         # Initialize re-generators
         if not test_start_positions:
             return SampleGenerator(
                 fpath,
                 train_start_positions,
-                labeled,
-                text_only=text_only,
+                **kwargs,
             )
         else:
             return SampleGenerator(
                 fpath,
                 train_start_positions,
-                labeled,
-            ), SampleGenerator(fpath, test_start_positions, labeled)
+                **kwargs,
+            ), SampleGenerator(fpath, test_start_positions, **kwargs)
 
     def generate_samples(self, *args, **kwargs):
         """

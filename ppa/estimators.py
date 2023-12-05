@@ -1,10 +1,13 @@
 import logging
+import pickle
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, cast
 
 import numpy as np
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.ensemble import IsolationForest
 
 # from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
@@ -20,6 +23,61 @@ from sklearn.metrics import (
 from ppa.display import Plotter
 from ppa.processing import SampleGenerator
 from ppa.utils import timer
+
+
+class ScoredIsolationForest(IsolationForest):
+    """Doc."""
+
+    def score(self, X: np.ndarray, y: List[str], plot=False, **kwargs):
+        """
+        Compute the balanced accuracy score and other evaluation metrics.
+
+        Parameters
+        ----------
+        X : SampleGenerator
+            Input documents.
+        y : List[str]
+            Target labels.
+        plot : bool, optional
+            Flag to enable plotting, by default False.
+
+        Returns
+        -------
+        float
+            Balanced accuracy score.
+        """
+
+        # convet labeles to an array
+        y_true = np.array([-1 if label == "good" else 1 for label in y])
+
+        # predict and get scores
+        y_pred, y_scores = self.predict(X), self.score_samples(X)
+
+        # Compute balanced accuracy and the precision-recall curve
+        bal_acc = balanced_accuracy_score(y_true, y_pred)
+        precision, recall, _ = precision_recall_curve(y_true, y_scores)
+
+        # Calculate the AUC-PR
+        auc_pr = auc(recall, precision)
+
+        # calculate individual accuracies # TODO: the "good_accuracy" is really just the recall
+        good_idxs = y_true == -1
+        bad_idxs = y_true == 1
+        good_accuracy = sum(y_pred[good_idxs] == y_true[good_idxs]) / y_true[good_idxs].size
+        bad_accuracy = sum(y_pred[bad_idxs] == y_true[bad_idxs]) / y_true[bad_idxs].size
+        logging.info(
+            f"[{self.__class__.__name__}.score] ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}. AUPRC: {auc_pr:.2f}"
+        )
+
+        if plot:
+            # TESTESTEST
+            RocCurveDisplay.from_predictions(y_true, y_scores, name="ROC-AUC")
+            PrecisionRecallDisplay.from_predictions(y_true, y_scores, name="AUPRC")
+            ConfusionMatrixDisplay.from_predictions(y_true, y_pred, normalize="true")
+            print(classification_report(y_true, y_pred))
+            # /TESTESTEST
+
+        return bal_acc
 
 
 class D2VTransformer(BaseEstimator, TransformerMixin):
@@ -51,12 +109,8 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         ----------
         epochs : int
             Number of training epochs.
-        train_score : bool, optional
-            Flag to compute training score, by default False.
         random_state : int, optional
             Random seed for reproducibility, by default None.
-        threshold : float, optional
-            Threshold for decision making, by default 0.5.
         vector_size : int, optional
             Dimensionality of the feature vectors, by default 300.
         dm : int, optional
@@ -81,7 +135,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
             setattr(self, key, value)
 
     @timer(1000)
-    def fit(self, X: SampleGenerator | List[TaggedDocument], y: List[str]):
+    def fit(self, X: SampleGenerator | List[TaggedDocument], y=None):
         """
         Fit the Doc2Vec Transformer.
 
@@ -89,14 +143,16 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         ----------
         X : SampleGenerator
             Training samples.
-        y : array-like
-            Target labels.
 
         Returns
         -------
         D2VTransformer
             Instance of the fitted classifier.
         """
+
+        # save the training data generator if one is supplied
+        if isinstance(X, SampleGenerator):
+            self.train_set = X
 
         # Initialize both models
         self.model = Doc2Vec(
@@ -124,6 +180,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
 
         return self
 
+    @timer(2000)
     def transform(
         self,
         X: SampleGenerator | List[TaggedDocument],
@@ -165,10 +222,11 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
 
         return X_vec
 
-    @timer(1000)
+    @timer(2000)
     def sanity_check(self, X_train: SampleGenerator, n_samples=1_000, max_rank=None, plot=False):
         """
-        Perform a sanity check to evaluate model performance.
+        Perform a sanity check to test model general behaviour.
+        If most inferred training documents are most similar to their model representation, the model appears to work as expected.
 
         Parameters
         ----------
@@ -221,25 +279,38 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
 
         return sorted_rank_counts
 
-    def save_model(self, filepath):
+    def save(self, filepath: Path):
         """
         Save the trained Doc2Vec model.
 
         Parameters
         ----------
         filepath : str
-            Filepath to save the model.
+            filepath in which to save the object.
         """
 
-        self.model.save(filepath)
+        # saving the model
+        model_path = str(filepath.with_suffix(".model"))
+        self.model.save(model_path)
         logging.info(
-            f"[{self.__class__.__name__}.save_model] Doc2Vec model successfully saved to {filepath}."
+            f"[{self.__class__.__name__}.save_model] Doc2Vec model successfully saved to {model_path}."
+        )
+
+        # saving the estimator
+        del self.model
+        with open(filepath, "wb") as file:
+            pickle.dump(self, file)
+
+        # reload the model after saving the estimator without it
+        self.model = Doc2Vec.load(model_path)
+        logging.info(
+            f"[{self.__class__.__name__}.save_model] {self.__class__.__name__} successfully saved to {filepath}."
         )
 
     @classmethod
-    def load_model(cls, filepath):
+    def load(cls, filepath: Path):
         """
-        Load a trained Doc2Vec model and return an instance of the D2VClassifier.
+        Load a trained Doc2Vec model and return an instance of the D2VTransformer.
 
         Parameters
         ----------
@@ -248,17 +319,21 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
 
         Returns
         -------
-        D2VClassifier
-            Instance of D2VClassifier with the loaded model.
+        D2VTransformer
+            Instance of D2VTransformer with the loaded model.
         """
-        instance = cls()  # Create a new instance of the class
-        instance.model = Doc2Vec.load(str(filepath))
-        logging.info(
-            f"[{cls.__class__.__name__}.load_model] Doc2Vec model successfully loaded from {filepath}."
-        )
 
-        # Reset other attributes to default values
-        instance.__init__()
+        # load estimator
+        with open(filepath, "rb") as file:
+            instance = pickle.load(file)
+
+        # load model
+        model_path = str(filepath.with_suffix(".model"))
+        instance.model = Doc2Vec.load(model_path)
+        logging.info(
+            f"[{cls.__class__.__name__}.load] {cls.__class__.__name__} (and Doc2Vec model) successfully loaded from {filepath}."
+        )
+        logging.info(f"{dir(cls)}")  # TESTESTEST
 
         return instance
 
@@ -319,18 +394,18 @@ class D2VClassifier(D2VTransformer):
         """
 
         # Loop through the arguments and set attributes dynamically
-        arguments = locals()
+        kwargs = locals()
         # remove the unneeded standard locals
-        del arguments["self"]  # Remove 'self' from the dictionary
-        del arguments["__class__"]  # Remove 'class' from the dictionary
-        for key, value in arguments.items():
+        del kwargs["self"]  # Remove 'self' from the dictionary
+        del kwargs["__class__"]  # Remove 'class' from the dictionary
+        for key, value in kwargs.items():
             setattr(self, key, value)
 
         # remove nonexistant parmaters for transformer
-        del arguments["train_score"]  # Remove 'class' from the dictionary
-        del arguments["threshold"]  # Remove 'class' from the dictionary
+        del kwargs["train_score"]  # Remove 'class' from the dictionary
+        del kwargs["threshold"]  # Remove 'class' from the dictionary
         # initialize the transformer base class with the same arguments
-        super().__init__(**arguments)
+        super().__init__(**kwargs)
 
     @timer(1000)
     def fit(self, X: SampleGenerator | List[TaggedDocument], y: List[str]):
@@ -351,31 +426,56 @@ class D2VClassifier(D2VTransformer):
             Instance of the fitted classifier.
         """
 
-        super().fit(X, y, should_time=False)
+        # train the model using the parent transformer class
+        super().fit(X, should_time=False)
 
-        # getting mean labeled training vectors (inferred)
-        logging.info(
-            f"[{self.__class__.__name__}.fit] Getting good/bad mean vectors based on inference of labeled training samples..."
-        )
-        # get indices for all good/bad training vectors
-        label2num = {"unlabeled": np.nan, "good": -1, "bad": 1}
-        y_arr = np.array([label2num[label] for label in y])
-        good_idxs = y_arr == -1
-        bad_idxs = y_arr == 1
-        # trasform them separately
+        # collect all labeled document keys (for scoring)
+        good_keys = []
+        bad_keys = []
         try:
-            X_good: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
-                idxs=np.nonzero(good_idxs)[0]
-            )
-            X_bad: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
-                idxs=np.nonzero(bad_idxs)[0]
-            )
+            X = cast(SampleGenerator, X)
+            for key, label in zip(X.keys, X.labels):
+                if label == "good":
+                    good_keys.append(key)
+                elif label == "bad":
+                    bad_keys.append(key)
         except AttributeError:
             # X is a list
-            X_good = [X[idx] for idx in np.nonzero(good_idxs)[0]]
-            X_bad = [X[idx] for idx in np.nonzero(bad_idxs)[0]]
-        mean_good = self.transform(X_good).mean(axis=0)
-        mean_bad = self.transform(X_bad).mean(axis=0)
+            X = cast(List[TaggedDocument], X)
+            for idx, label in enumerate(y):
+                if label == "good":
+                    good_keys.append(X[idx].tags[0])
+                elif label == "bad":
+                    bad_keys.append(X[idx].tags[0])
+
+        # get the mean vectors from the model using the collected keys
+        mean_good = np.array([self.model.dv[k] for k in good_keys]).mean(axis=0)
+        mean_bad = np.array([self.model.dv[k] for k in bad_keys]).mean(axis=0)
+
+        #        # getting mean labeled training vectors (inferred)
+        #        logging.info(
+        #            f"[{self.__class__.__name__}.fit] Getting good/bad mean vectors based on inference of labeled training samples..."
+        #        )
+        #        # get indices for all good/bad training vectors
+        #        label2num = {"unlabeled": np.nan, "good": -1, "bad": 1}
+        #        y_arr = np.array([label2num[label] for label in y])
+        #        good_idxs = y_arr == -1
+        #        bad_idxs = y_arr == 1
+        #        # trasform them separately
+        #        try:
+        #            X_good: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+        #                idxs=np.nonzero(good_idxs)[0]
+        #            )
+        #            X_bad: SampleGenerator | List[TaggedDocument] = cast(SampleGenerator, X).sample(
+        #                idxs=np.nonzero(bad_idxs)[0]
+        #            )
+        #        except AttributeError:
+        #            # X is a list
+        #            X_good = [X[idx] for idx in np.nonzero(good_idxs)[0]]
+        #            X_bad = [X[idx] for idx in np.nonzero(bad_idxs)[0]]
+        #        mean_good = self.transform(X_good).mean(axis=0)
+        #        mean_bad = self.transform(X_bad).mean(axis=0)
+
         # add them as the "good"/"bad" model vectors, replacing if exist (if model was trained with those secondary tags)
         self.model.dv.add_vectors(["good", "bad"], [mean_good, mean_bad], replace=True)
 
@@ -415,7 +515,6 @@ class D2VClassifier(D2VTransformer):
         # scale to [0, 1] range and return scores
         return ((good_sims - bad_sims) + 2) / 4
 
-    #     @timer(1000)
     def predict(
         self,
         X: SampleGenerator | List[TaggedDocument],
@@ -449,7 +548,6 @@ class D2VClassifier(D2VTransformer):
         else:
             return y_pred
 
-    #     @timer(1000)
     def score(self, X: SampleGenerator | List[TaggedDocument], y: List[str], plot=False, **kwargs):
         """
         Compute the balanced accuracy score and other evaluation metrics.

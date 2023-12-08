@@ -98,7 +98,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         ns_exponent: float = 0.75,
         # General
         epochs: int = 10,
-        random_state: int = None,
+        seed: int = None,
         workers: int = 1,
     ):
         """
@@ -108,7 +108,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         ----------
         epochs : int
             Number of training epochs.
-        random_state : int, optional
+        seed : int, optional
             Random seed for reproducibility, by default None.
         vector_size : int, optional
             Dimensionality of the feature vectors, by default 300.
@@ -127,6 +127,10 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         workers : int, optional
             Number of worker threads to train the model, by default 1.
         """
+
+        # randomize seed if not suppled
+        seed = seed or np.random.randint(0, 2**31)
+
         # Loop through the arguments and set attributes dynamically
         arguments = locals()
         del arguments["self"]  # Remove 'self' from the dictionary
@@ -158,7 +162,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
             sample=self.sample,
             hs=self.hs,
             negative=self.negative,
-            seed=self.random_state,
+            seed=self.seed,
             workers=self.workers,
         )
 
@@ -298,6 +302,13 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
             f"[{self.__class__.__name__}.load_model] Doc2Vec model successfully loaded from {filepath}."
         )
 
+    def generate_train_test_sets(self, corpus_fpath, **kwargs):
+        """Doc."""
+
+        return SampleGenerator(
+            corpus_fpath, positive_keys=self.model.dv.index_to_key, **kwargs
+        ), SampleGenerator(corpus_fpath, negative_keys=self.model.dv.index_to_key, **kwargs)
+
 
 class D2VClassifier(D2VTransformer):
     """
@@ -319,7 +330,7 @@ class D2VClassifier(D2VTransformer):
         # General
         epochs: int = 10,
         train_score: bool = False,
-        random_state: int = None,
+        seed: int = None,
         threshold: float = 0.5,
         workers: int = 1,
     ):
@@ -332,7 +343,7 @@ class D2VClassifier(D2VTransformer):
             Number of training epochs.
         train_score : bool, optional
             Flag to compute training score, by default False.
-        random_state : int, optional
+        seed : int, optional
             Random seed for reproducibility, by default None.
         threshold : float, optional
             Threshold for decision making, by default 0.5.
@@ -388,7 +399,7 @@ class D2VClassifier(D2VTransformer):
         """
 
         # train the model using the parent transformer class
-        super().fit(X, should_time=False)
+        super().fit(X, y, should_time=False)
 
         # collect all labeled document keys (for scoring)
         good_keys = []

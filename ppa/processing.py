@@ -41,7 +41,7 @@ class SampleGenerator:
 
     Parameters
     ----------
-    fpath : Path
+    corpus_fpath : Path
         Path to the data file.
     start_pos_list : List[int]
         List of starting positions in the file for sampling.
@@ -51,11 +51,13 @@ class SampleGenerator:
         Flag to indicate sampling text only, by default False.
     """
 
-    fpath: Path
-    start_pos_list: List[int]
+    corpus_fpath: Path
+    start_pos_list: List[int] = None
     labeled: bool = False
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
     text_only: bool = False
+    positive_keys: List[str] = None
+    negative_keys: List[str] = None
 
     @property
     def labels(self) -> List[str]:
@@ -88,12 +90,45 @@ class SampleGenerator:
         Initialize SampleGenerator.
         """
 
+        if self.positive_keys and self.negative_keys:
+            raise ValueError("Only one of `positive_keys` or `positive_keys` can be supplied!")
+
+        # initialize indexed file
         self.indexed_file = IndexedFile(
-            self.fpath,
+            self.corpus_fpath,
             "read",
             self.start_pos_list,
         )
+        # initialize empties for labels and keys (obtained through property methods)
         self._labels: List[str] = []
+        self._keys: List[str] = []
+
+        # initialize using keys instead of file start positions
+        if self.positive_keys or self.negative_keys:
+            # initialize file start positions
+            self.start_pos_list = []
+            # use supplied keys
+            if self.positive_keys:
+                for key in self.positive_keys:
+                    try:
+                        pos, _ = self.indexed_file.key2poslabel[key]
+                    except KeyError:
+                        pass
+                    else:
+                        self.start_pos_list.append(pos)
+            # use all but suplied keys
+            if self.negative_keys:
+                valid_keys = set(self.indexed_file.key2poslabel.keys()) - set(self.negative_keys)
+                for key in valid_keys:
+                    pos, _ = self.indexed_file.key2poslabel[key]
+                    self.start_pos_list.append(pos)
+
+            # re-initialize indexed file with the created 'start_pos_list'
+            self.indexed_file = IndexedFile(
+                self.corpus_fpath,
+                "read",
+                self.start_pos_list,
+            )
 
     def __repr__(self) -> str:
         """
@@ -105,7 +140,7 @@ class SampleGenerator:
             String representation.
         """
         counter_str = ", ".join([f"{k}: {v:,}" for k, v in Counter(self.labels).items()])
-        return f"SampleGenerator({len(self):,} `TaggedDocument` objects ({counter_str}), fpath={self.fpath})"
+        return f"SampleGenerator({len(self):,} `TaggedDocument` objects ({counter_str}), corpus_fpath={self.corpus_fpath})"
 
     def sample(self, n: int = None, idxs: List[int] | np.ndarray = None) -> "SampleGenerator":
         """
@@ -132,7 +167,7 @@ class SampleGenerator:
             start_pos_list = start_pos_list[:n]
 
         return SampleGenerator(
-            self.fpath,
+            self.corpus_fpath,
             start_pos_list,
             self.labeled,
             self.rng,
@@ -247,6 +282,8 @@ class SampleGenerator:
                 pos2keylabel[pos] = key, label
 
         self._keys, self._labels = zip(*[pos2keylabel[pos] for pos in self.start_pos_list])
+        self._keys = list(self._keys)
+        self._labels = list(self._labels)
         return self._keys, self._labels
 
 
@@ -268,9 +305,9 @@ class CorpusProcessor:
         """
 
         # file paths:
-        self.dict_path = self.save_dir_path / "dictionary.pkl"
         self.corpus_path = self.save_dir_path / "corpus.json"
-        self.bigrams_path = self.save_dir_path / "bigrams.model"
+        self.dict_path = self.save_dir_path / "dictionary.pkl"
+        self.bigrams_path = self.save_dir_path / "bigrams.pkl"
 
         try:
             self.dct = Dictionary.load(str(self.dict_path))

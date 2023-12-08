@@ -16,7 +16,6 @@
 # %% [markdown]
 # ### TODO: consider/checkout implementing use of `corpus_file`
 # ### TODO: try xgboost classification on the inferred training vectors (with feature selection) - I could use just D2VTransformer (Gensim) for this, attaching it to xgboost with sklearn in a pipeline
-# ### TODO: Compare calculating good/bad mean vectors according to model vectors vs. according to inferred vectors. Then, try training a single-tag ('unsupervised') Doc2Vec model, scoring according to inferred good/bad training labels (instead of the now non-existant good/bad model vectors) - is it better?
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 
@@ -34,6 +33,7 @@ from ppa.display import Plotter
 import numpy as np
 from collections import Counter
 import psutil
+import pandas as pd
 
 # Configure logging
 config_logging()
@@ -102,7 +102,7 @@ N_PATHS = 100_000_000
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
 all_policy_paths = [fpath for fpath in REPO_PATH.rglob("*.md") if fpath.name != "README.md"]
-SEED = 42
+SEED = 42 + 1
 rng = np.random.default_rng(seed=SEED)
 print("Shuffling... ", end="")
 rng.shuffle(all_policy_paths)
@@ -263,36 +263,35 @@ display_wordcloud(filtered_dct, per_doc=True)
 # 5) The index file is used to add secondary tags to the `TaggedDocument` objects provided to Doc2Vec during training, and for synchronizing between policies and their labels during scoring of the model.
 
 # %%
-from itertools import chain
+# from itertools import chain
 
-# N = 10
-N = np.inf
+# # N = 10
+# N = np.inf
 
-print(f"Getting URLs... ", end="")
-# tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
-tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
-print(f"{len(tags):,} URLs obtained.")
+# print(f"Getting URLs... ", end="")
+# # tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
+# tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
+# print(f"{len(tags):,} URLs obtained.")
 
 # %% [markdown]
 # ETL
 
 # %%
-import asyncio
-from ppa.processing import ToSDRDataLoader
-import pandas as pd
+# import asyncio
+# from ppa.processing import ToSDRDataLoader
 
-# get all URLs for which I have PPs
+# # get all URLs for which I have PPs
 
 
-# set flags
-# FORCE_EXT = True
-FORCE_EXT = False
+# # set flags
+# # FORCE_EXT = True
+# FORCE_EXT = False
 
-# FORCE_TRANS = True
-FORCE_TRANS = False
+# # FORCE_TRANS = True
+# FORCE_TRANS = False
 
-# Instantiate data-loading object
-data_loader = ToSDRDataLoader()
+# # Instantiate data-loading object
+# data_loader = ToSDRDataLoader()
 
 # ratings_df = await data_loader.load_data(  # type: ignore
 #     tags,
@@ -300,54 +299,53 @@ data_loader = ToSDRDataLoader()
 #     force_extract=FORCE_EXT,
 #     force_transform=FORCE_TRANS,
 # )
-ratings_df = pd.DataFrame({})
-raise ValueError("Uncomment the 'await'!!!")
+# # ratings_df = pd.DataFrame({})
+# # raise ValueError("Uncomment the 'await'!!!")
 
-Beep(1000, 500)
-print("Done.")
+# Beep(1000, 500)
+# print("Done.")
 
-# how many datapoints are there
-print("Number of records: ", len(ratings_df))
+# # how many datapoints are there
+# print("Number of records: ", len(ratings_df))
 
-# how many labels do I have
-print("Number of labels: ", ratings_df["rating"].notna().sum())
+# # how many labels do I have
+# print("Number of labels: ", ratings_df["rating"].notna().sum())
 
-# how many possible duplicates do I have
-print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
+# # how many possible duplicates do I have
+# print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
 
-ratings_df.sample(10)
+# ratings_df.sample(10)
 
 # %% [markdown]
 # ## 3.2 Checking for Bias in Labeled Data
 
 # %%
-letter_count_dict = dict(sorted(Counter(ratings_df["rating"]).items()))
+# letter_count_dict = dict(sorted(Counter(ratings_df["rating"]).items()))
 
-with Plotter(suptitle="Letter Rating Counts", xlabel="Letter Rating", ylabel="Counts") as ax:
-    ax.bar(letter_count_dict.keys(), letter_count_dict.values())
-
+# with Plotter(suptitle="Letter Rating Counts", xlabel="Letter Rating", ylabel="Counts") as ax:
+#     ax.bar(letter_count_dict.keys(), letter_count_dict.values())
 
 # %% [markdown]
 # As one might expect, good privacy policies are hard to come by. As such, I will, for now, label privacy policies as either 'good' ('A' or 'B' rating) vs. 'bad' ('C', 'D', or 'E' rating):
 
 # %%
-def relabel_rating(rating: str):
-    """Doc."""
+# def relabel_rating(rating: str):
+#     """Doc."""
 
-    if rating in "AB":
-        return "good"
-    elif rating in "CDE":
-        return "bad"
-    else:
-        return rating
+#     if rating in "AB":
+#         return "good"
+#     elif rating in "CDE":
+#         return "bad"
+#     else:
+#         return rating
 
 
-ratings_df["label"] = ratings_df["rating"].apply(relabel_rating)
+# ratings_df["label"] = ratings_df["rating"].apply(relabel_rating)
 
-label_count_dict = dict(sorted(Counter(ratings_df["label"]).items()))
+# label_count_dict = dict(sorted(Counter(ratings_df["label"]).items()))
 
-with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
-    ax.bar(label_count_dict.keys(), label_count_dict.values())
+# with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
+#     ax.bar(label_count_dict.keys(), label_count_dict.values())
 
 # %% [markdown]
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
@@ -356,9 +354,9 @@ with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
 # Finally, let's update the data index file with labels for URLs which have them:
 
 # %%
-if SHOULD_REPROCESS:
-    url2label = ratings_df.set_index("tag")["label"].to_dict()
-    cp.add_label_tags(url2label)
+# if SHOULD_REPROCESS:
+#     url2label = ratings_df.set_index("tag")["label"].to_dict()
+#     cp.add_label_tags(url2label)
 
 # %% [markdown]
 # # 4. Modeling
@@ -370,21 +368,10 @@ if SHOULD_REPROCESS:
 # 4) Ultimately, this will enable using standard classification methods (tabular data)
 
 # %% [markdown]
-# Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data.
-
-# %%
-train_set, test_set = cp.generate_train_test_sets(
-    seed=SEED,
-)
-
-print("train_set: ", train_set)
-print("test_set: ", test_set)
-
-# %% [markdown]
 # ## 4.1 Model Training and Optimization
 
 # %% [markdown]
-# Train a specific Doc2Vec model (unsupervised), and save:
+# Split to train/test sets in a stratified fashion, i.e. keep the same label ratio (in this case the percentages of "good" and "bad" policies) in the data, train a specific Doc2Vec model (unsupervised), and save:
 
 # %%
 from ppa.estimators import D2VClassifier
@@ -392,10 +379,18 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-SHOULD_FIT_MODEL = True
-# SHOULD_FIT_MODEL = False
+# SHOULD_FIT_MODEL = True
+SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
+
+    # train/test splitting
+    train_set, test_set = cp.generate_train_test_sets(
+        seed=SEED,
+    )
+    print("train_set: ", train_set)
+    print("test_set: ", test_set)
+
     # initialize classifier
     classifier = D2VClassifier(
         epochs=5,
@@ -403,7 +398,7 @@ if SHOULD_FIT_MODEL:
         window=5,
         negative=20,
         train_score=True,
-        random_state=SEED,
+        seed=SEED,
         #     iterative_training=True,
         workers=psutil.cpu_count(logical=False) - 1,
     )
@@ -416,11 +411,7 @@ if SHOULD_FIT_MODEL:
 
     # save
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
-    classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.pkl"))
-
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
+    classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model"))
 
 # %% [markdown]
 # Cross validate
@@ -431,39 +422,38 @@ raise RuntimeError("STOP HERE!")
 # # TODO: <s>CHECK THE SAME FOR UPSAMPLING</s> - NOT HELPING - SAME PERFORMANCE (OR SLIGHTLY WORSE)
 
 # %%
-from sklearn.model_selection import cross_validate
+# from sklearn.model_selection import cross_validate
 
-N = cp.total_samples
-toy_train_set = cp.generate_samples(
-    n_samples=N,
-    seed=SEED,
-)
-print(Counter(toy_train_set.labels))
+# N = cp.total_samples
+# toy_train_set = cp.generate_samples(
+#     seed=SEED,
+# )
+# print(Counter(toy_train_set.labels))
 
-CV = 4
+# CV = 4
 
-tic = time.perf_counter()
-logging.info("Starting CV...")
-scores = cross_validate(
-    D2VClassifier(
-        epochs=5,
-        vector_size=84,
-        window=5,
-        negative=20,
-        random_state=SEED,
-        #     workers=psutil.cpu_count(logical=False) - 1
-    ),
-    toy_train_set,
-    toy_train_set.labels,
-    cv=CV,
-    #     return_train_score=True,
-    verbose=10,
-    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-)
-logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-print("Mean test score: ", np.nanmean(scores["test_score"]))
-scores_df = pd.DataFrame(scores)
-display(scores_df)
+# tic = time.perf_counter()
+# logging.info("Starting CV...")
+# scores = cross_validate(
+#     D2VClassifier(
+#         epochs=5,
+#         vector_size=84,
+#         window=5,
+#         negative=20,
+#         seed=SEED,
+#         #     workers=psutil.cpu_count(logical=False) - 1
+#     ),
+#     toy_train_set,
+#     toy_train_set.labels,
+#     cv=CV,
+#     #     return_train_score=True,
+#     verbose=10,
+#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+# )
+# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# print("Mean test score: ", np.nanmean(scores["test_score"]))
+# scores_df = pd.DataFrame(scores)
+# display(scores_df)
 
 # %% [markdown]
 # Perform search to find best set of hyperparameters
@@ -544,7 +534,9 @@ from gensim.models.doc2vec import Doc2Vec
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
 if not SHOULD_FIT_MODEL:
-    classifier = D2VClassifier.load(MODEL_DIR_PATH / "pp_d2v.pkl")
+    classifier = D2VClassifier()
+    classifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
+    train_set, test_set = classifier.generate_train_test_sets(cp.corpus_path)
 
     # score the model
     print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
@@ -565,64 +557,64 @@ else:
 # As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
-classifier.sanity_check(train_set, max_rank=10, plot=True)
+# classifier.sanity_check(train_set, max_rank=10, plot=True)
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D
 # We begin by inferring vectors for all labeled samples in the test set
 
 # %%
-# Infer document vectors for the test data
-# convet labeles to an array and keep only "good"/"bad" elements, and their indices
-labeled_test_tags, labeled_test_idxs = classifier.valid_labels(test_set.labels)
-test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_test_idxs)[0])
-test_vectors_labeled = classifier.transform(test_set_labeled, normalized=True)
+# # Infer document vectors for the test data
+# # convet labeles to an array and keep only "good"/"bad" elements, and their indices
+# labeled_test_tags, labeled_test_idxs = classifier.valid_labels(test_set.labels)
+# test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_test_idxs)[0])
+# test_vectors_labeled = classifier.transform(test_set_labeled, normalized=True)
 
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# # Beep when done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %% [markdown]
 # ### 5.2.1 PCA
 
 # %%
-from sklearn.decomposition import PCA
-from ppa.display import display_dim_reduction
+# from sklearn.decomposition import PCA
+# from ppa.display import display_dim_reduction
 
-test_labels = ["good" if val == -1 else "bad" for val in labeled_test_tags]
+# test_labels = ["good" if val == -1 else "bad" for val in labeled_test_tags]
 
-# Perform PCA to reduce dimensionality for visualization
-pca = PCA(n_components=2)  # You can adjust the number of components as needed
-pca_result = pca.fit_transform(test_vectors_labeled)
+# # Perform PCA to reduce dimensionality for visualization
+# pca = PCA(n_components=2)  # You can adjust the number of components as needed
+# pca_result = pca.fit_transform(test_vectors_labeled)
 
-# annots = [
-#     tagged_doc.tags[0]
-#     for tagged_doc in test_set
-#     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-# ]
-display_dim_reduction(pca_result, "PCA", labels=test_labels, figsize=(10, 8))
+# # annots = [
+# #     tagged_doc.tags[0]
+# #     for tagged_doc in test_set
+# #     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
+# # ]
+# display_dim_reduction(pca_result, "PCA", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
 # ### 5.2.2 t-SNE
 
 # %%
-from sklearn.manifold import TSNE
+# from sklearn.manifold import TSNE
 
-tsne = TSNE(
-    n_components=2,
-    perplexity=1,
-    learning_rate=200,
-    n_iter=1000,
-    n_iter_without_progress=500,
-    random_state=SEED,
-)
-tsne_result = tsne.fit_transform(test_vectors_labeled)
+# tsne = TSNE(
+#     n_components=2,
+#     perplexity=1,
+#     learning_rate=200,
+#     n_iter=1000,
+#     n_iter_without_progress=500,
+#     random_state=SEED,
+# )
+# tsne_result = tsne.fit_transform(test_vectors_labeled)
 
-# annots = [
-#     tagged_doc.tags[0]
-#     for tagged_doc in test_set
-#     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-# ]
-display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
+# # annots = [
+# #     tagged_doc.tags[0]
+# #     for tagged_doc in test_set
+# #     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
+# # ]
+# display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 
 # %% [markdown]
 # I cannot see any clear pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualizations don't seem to capture it.
@@ -632,48 +624,48 @@ display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
 # Perhaps the similarity between like-labled policies is lost in the dimensionality reduction. Let's try measuring the cosine similarity between the vectors directly. We can check out the distribution of my custom similarity scores separately for "good" and "bad" policies, as well as for the rest of the (unlabeled) policies:
 
 # %%
-y_test_scores_labeled = classifier.decision_function(test_set_labeled)
-y_test_scores_unlabeled = classifier.decision_function(
-    test_set.sample(1_000, idxs=np.nonzero(~labeled_test_idxs)[0])
-)
+# y_test_scores_labeled = classifier.decision_function(test_set_labeled)
+# y_test_scores_unlabeled = classifier.decision_function(
+#     test_set.sample(1_000, idxs=np.nonzero(~labeled_test_idxs)[0])
+# )
 
-# Beep when done
-Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+# # Beep when done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
-with Plotter(
-    figsize=(10, 6),
-    xlabel="Similarity Scores",
-    ylabel="Bin Counts (Density)",
-    suptitle="Distribution of Similarity Scores",
-) as ax:
+# with Plotter(
+#     figsize=(10, 6),
+#     xlabel="Similarity Scores",
+#     ylabel="Bin Counts (Density)",
+#     suptitle="Distribution of Similarity Scores",
+# ) as ax:
 
-    # Plot the distribution of similarity scores
-    ax.hist(
-        good_scores := y_test_scores_labeled[labeled_test_tags == -1],
-        bins=int(np.sqrt(good_scores.size)),
-        density=True,
-        alpha=0.6,
-        label=f"Good ({good_scores.size})",
-    )
-    ax.hist(
-        bad_scores := y_test_scores_labeled[labeled_test_tags == 1],
-        bins=int(np.sqrt(bad_scores.size)),
-        density=True,
-        alpha=0.6,
-        label=f"Bad ({bad_scores.size})",
-    )
-    ax.hist(
-        y_test_scores_unlabeled,
-        bins=int(np.sqrt(len(y_test_scores_unlabeled))),
-        density=True,
-        alpha=0.3,
-        label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
-        zorder=1,
-    )
+#     # Plot the distribution of similarity scores
+#     ax.hist(
+#         good_scores := y_test_scores_labeled[labeled_test_tags == -1],
+#         bins=int(np.sqrt(good_scores.size)),
+#         density=True,
+#         alpha=0.6,
+#         label=f"Good ({good_scores.size})",
+#     )
+#     ax.hist(
+#         bad_scores := y_test_scores_labeled[labeled_test_tags == 1],
+#         bins=int(np.sqrt(bad_scores.size)),
+#         density=True,
+#         alpha=0.6,
+#         label=f"Bad ({bad_scores.size})",
+#     )
+#     ax.hist(
+#         y_test_scores_unlabeled,
+#         bins=int(np.sqrt(len(y_test_scores_unlabeled))),
+#         density=True,
+#         alpha=0.3,
+#         label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
+#         zorder=1,
+#     )
 
-    ax.legend(title="Label (Num.)")
-    ax.grid(True)
+#     ax.legend(title="Label (Num.)")
+#     ax.grid(True)
 
 # %% [markdown]
 # This shows how good the model is at separating "good" policies from "bad" ones - the less overlap between the two histograms, the less errors it will make when classifying. We will, for now, score the model using balanced accuracy, using the above method to predict "good" policies for those scoring above a threshold (default 0.5). It is worth mentioning that this overlap unavoidable if there are incorrect labels or otherwise noisy data (bad preprocessing etc.)
@@ -686,53 +678,53 @@ with Plotter(
 # Let's get the URLs, labels and scores in a `DataFrame`:
 
 # %%
-df = pd.DataFrame(
-    {
-        "url": [td.tags[0] for td in test_set_labeled],
-        "label": test_set_labeled.labels,
-        "score": y_test_scores_labeled,
-    }
-)
+# df = pd.DataFrame(
+#     {
+#         "url": [td.tags[0] for td in test_set_labeled],
+#         "label": test_set_labeled.labels,
+#         "score": y_test_scores_labeled,
+#     }
+# )
 
 # %% [markdown]
 # What seems interesting to test now is what the actual 'letter score' (from ToS;DR) is for each of the so-called outliers among the top scores - if the outliers are all 'C's, this could mean that them being labeled "bad" is a consequence of the binary labeling forced unto the 5 letter ratings:
 
 # %%
-merged_df = pd.merge(df, ratings_df[["tag", "rating"]], left_on="url", right_on="tag", how="left")
-df["letter"] = merged_df["rating"]
-df.sort_values(by="score", ascending=False).iloc[:20]
+# merged_df = pd.merge(df, ratings_df[["tag", "rating"]], left_on="url", right_on="tag", how="left")
+# df["letter"] = merged_df["rating"]
+# df.sort_values(by="score", ascending=False).iloc[:20]
 
 # %% [markdown]
 # So, while "bad"-labled policies with high scores are indeed 'C's, there are some 'D' there too. Let's check out the distributions as in 5.3, this time separated and colored by letter rating:
 
 # %%
-with Plotter(
-    suptitle="Histograms of Scores by Letter Rating",
-    xlabel="Score",
-    ylabel="Bin Counts (Density)",
-) as ax:
+# with Plotter(
+#     suptitle="Histograms of Scores by Letter Rating",
+#     xlabel="Score",
+#     ylabel="Bin Counts (Density)",
+# ) as ax:
 
-    # Iterate through unique letters and plot histograms for each
-    for letter in sorted(df["letter"].unique(), reverse=True):
-        scores_for_letter = df[df["letter"] == letter]["score"]
-        ax.hist(
-            scores_for_letter,
-            bins=int(np.sqrt(len(scores_for_letter))),
-            density=True,
-            alpha=0.25,
-            label=f"{letter} ({len(scores_for_letter):,})",
-        )
+#     # Iterate through unique letters and plot histograms for each
+#     for letter in sorted(df["letter"].unique(), reverse=True):
+#         scores_for_letter = df[df["letter"] == letter]["score"]
+#         ax.hist(
+#             scores_for_letter,
+#             bins=int(np.sqrt(len(scores_for_letter))),
+#             density=True,
+#             alpha=0.25,
+#             label=f"{letter} ({len(scores_for_letter):,})",
+#         )
 
-    ax.hist(
-        y_test_scores_unlabeled,
-        bins=int(np.sqrt(len(y_test_scores_unlabeled))),
-        density=True,
-        alpha=0.5,
-        label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
-        zorder=-1,
-    )
+#     ax.hist(
+#         y_test_scores_unlabeled,
+#         bins=int(np.sqrt(len(y_test_scores_unlabeled))),
+#         density=True,
+#         alpha=0.5,
+#         label=f"Unlabeled (sample of {len(y_test_scores_unlabeled):,})",
+#         zorder=-1,
+#     )
 
-    ax.legend(title="Letter (Num.)")
+#     ax.legend(title="Letter (Num.)")
 
 # %% [markdown]
 # We can see that all but the 'E'-rated policies have some tail in the high-scores! Furthermore, many 'A' and 'B'-rated policies have fairly low scores!
@@ -741,7 +733,7 @@ with Plotter(
 # One solution for this could be simply wrong labels. Let's check out the worst-scored "good" policies. Since there are so little labeled policies in thee test set, we can check them all out together in one table:
 
 # %%
-df[df["label"] == "good"].sort_values(by="score")
+# df[df["label"] == "good"].sort_values(by="score")
 
 # %% [markdown]
 # Since I recognize some of the URLs as having legitimately "good" privacy policies, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
@@ -755,7 +747,7 @@ df[df["label"] == "good"].sort_values(by="score")
 
 # %%
 from sklearn.pipeline import Pipeline
-from ppa.estimators import D2VTransformer, IsolationForest
+from ppa.estimators import D2VTransformer, ScoredIsolationForest
 
 # from tempfile import mkdtemp
 # from shutil import rmtree
@@ -764,8 +756,13 @@ from ppa.estimators import D2VTransformer, IsolationForest
 d2vtrans = D2VTransformer()
 d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
+# get original train set
+original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
+
 # transform the train_set using d2vtrabs
-train_set_vec = d2vtrans.model.dv.vectors
+original_train_set_vec = np.array(
+    [d2vtrans.model.dv.get_vector(key) for key in original_train_set.keys]
+)
 # train_set_vec = d2vtrans.transform(train_set)
 
 # # create cache tempdir for caching fitted transformers
@@ -776,7 +773,7 @@ pipe = Pipeline(
     [
         (
             "clf",
-            IsolationForest(
+            ScoredIsolationForest(
                 n_estimators=50,
                 n_jobs=psutil.cpu_count(logical=False) - 1,
             ),
@@ -786,41 +783,69 @@ pipe = Pipeline(
 )
 
 # fit it to the pre-transformed train_set_vec
-pipe.fit(train_set_vec)
+pipe.fit(original_train_set_vec)
 
 # # Clear the cache directory when you don't need it anymore
 # rmtree(cachedir)
 
 # %%
+# # TESTESTEST
+
+# from scipy.stats import norm, gamma, poisson, expon, beta, chi2, lognorm, triang, uniform, nbinom
+
+
+# data_dists = {
+# #     "normal": norm.rvs(loc=0, scale=1, size=10_000),
+# #     "gamma": gamma.rvs(loc=50, a=1.5, scale=100, size=100_000),
+#     "nbinom": nbinom.rvs(1.5, 0.01, loc=50, size=10_000),
+# #     "exponential": expon.rvs(scale=0.1, size=10_000),
+# #     "uniform": uniform.rvs(loc=0.5, scale=0.5, size=10_000),
+# }
+# with Plotter() as ax:
+
+#     for label, data_dist in data_dists.items():
+#         ax.hist(data_dist, bins=round(np.sqrt(data_dist.size)), alpha=1/len(data_dists), label=label)
+#         print(f"dist effective range: {np.median(data_dist) - np.std(data_dist):.2f}-{np.median(data_dist) + np.std(data_dist):.2f}")
+#         print(f"dist total range: {min(data_dist):.2f}/{max(data_dist):.2f}")
+#         print(f"dist median: {np.median(data_dist):.2f}")
+#     ax.legend()
+
+# %%
 from sklearn.experimental import enable_halving_search_cv  # noqa
 from sklearn.model_selection import HalvingRandomSearchCV, StratifiedKFold, GridSearchCV
-from scipy.stats import randint, uniform
+from scipy.stats import randint, uniform, nbinom
 
 # Create a larger parameter grid with more combinations
 param_dist = {
-    "n_estimators": [20, 50, 100, 200, 300, 500],
-    "max_samples": ["auto", 0.001, 0.01, 0.1],
-    "contamination": ["auto", 0.01, 0.05, 0.1],
-    "max_features": [1.0, 0.75, 0.5],
-    "bootstrap": [True, False],
+    "clf__n_estimators": nbinom(1.5, 0.01, loc=50),  # effective range: 46.48-289.52
+    "clf__max_samples": uniform(loc=0.001, scale=(0.01 - 0.001)),  # 0.001 - 0.01
+    "clf__contamination": uniform(loc=0.001, scale=(0.1 - 0.001)),  # 0.001 - 0.1
+    "clf__max_features": uniform(loc=0.5, scale=(1 - 0.5)),  # 0.5 - 1
+    "clf__bootstrap": [True, False],
 }
 
 N_SPLITS = 4
+SEED = 42  # Assuming SEED is defined somewhere
 
 # Update the hyperparameter search to use the pipeline
-search = GridSearchCV(
+search = HalvingRandomSearchCV(
     estimator=pipe,
-    param_grid=param_dist,
+    param_distributions=param_dist,
+    factor=3,
+    min_resources=15000,
+    #     aggressive_elimination=True,
     verbose=4,
-    cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED),
+    cv=N_SPLITS,
+    #     cv=StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED),
     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
     refit=True,
+    random_state=SEED,
 )
 
 # Fit the hyperparameter search on your training data
 tic = time.perf_counter()
 logging.info("Starting search...")
-search.fit(train_set_vec, train_set.labels)
+search.fit(original_train_set_vec, original_train_set.labels)
 logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
 
 # Print the best hyperparameters
@@ -833,29 +858,21 @@ display(pd.DataFrame(search.cv_results_))
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # transform test_set using pretrained Doc2Vec
-test_set_labeled, _ = test_set.get_labeled()
-test_set_labeled_vec = d2vtrans.transform(test_set_labeled)
+original_test_set_labeled, _ = original_test_set.get_labeled()
+original_test_set_labeled_vec = d2vtrans.transform(original_test_set_labeled)
 
 # Get the score of the best model on the test set
-best_model_score = search.best_model.score(test_set_labeled_vec, test_set_labeled.labels)
-logging.info("Best Model Score:", best_model_score)
+best_model_score = search.best_estimator_.score(
+    original_test_set_labeled_vec, original_test_set_labeled.labels
+)
+logging.info(f"Best Model Score: {best_model_score}")
 
 # Beep again when best model is ready
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
-train_set_vec.shape
-
-# %%
-len(train_set.labels)
-
-# %%
-# transform test_set using pretrained Doc2Vec
-test_set_labeled, _ = test_set.get_labeled()
-test_set_labeled_vec = d2vtrans.transform(test_set_labeled)
-
-# predict using transformed test_set_vec
-pipe.score(test_set_labeled_vec, test_set_labeled.labels)
+Beep(1000, 500)
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 7 Considering Upsampling and Pseudo-Labeling

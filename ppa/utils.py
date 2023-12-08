@@ -23,7 +23,7 @@ class IndexedFile:
     Class for handling indexed file operations.
     """
 
-    fpath: Path
+    corpus_fpath: Path
     mode: str
     start_pos_list: List[int] = field(default_factory=list)
     index_suffix: InitVar[str] = "_idx"
@@ -33,14 +33,14 @@ class IndexedFile:
         Initialize the IndexedFile after object creation.
         """
 
-        self.idx_fpath = get_file_index_path(self.fpath, index_suffix)
+        self.idx_fpath = get_file_index_path(self.corpus_fpath, index_suffix)
 
         if self.mode in {"write", "reindex"}:
             # build index file-path
             self.temp_file = NamedTemporaryFile(mode="w", delete=False)
 
         if self.mode in {"read", "reindex"}:
-            # prepare key -> start position dictionary
+            # prepare key -> start position/label dictionary
             self.key2poslabel = {}
             with open(self.idx_fpath, "r") as file:
                 lines = file.readlines()
@@ -59,7 +59,7 @@ class IndexedFile:
         """
 
         if self.mode == "read":
-            self.file = open(self.fpath, "r")
+            self.file = open(self.corpus_fpath, "r")
             self.pos_idx = 0  # keep track of the file position index
 
         elif self.mode in {"write", "reindex"}:
@@ -77,8 +77,8 @@ class IndexedFile:
         self.file.close()
 
         if self.mode == "write":
-            # Move the temporary file to the supplied fpath
-            shutil.move(self.temp_file.name, self.fpath)
+            # Move the temporary file to the supplied corpus_fpath
+            shutil.move(self.temp_file.name, self.corpus_fpath)
             # create the index file from the collected lists (start positions and notes)
             with open(self.idx_fpath, "w") as idx_file:
                 for start_pos, notes in zip(self.start_pos_list, self.notes):
@@ -86,7 +86,7 @@ class IndexedFile:
                     idx_file.write("\n")
 
         elif self.mode == "reindex":
-            # Move the temporary file to the supplied fpath
+            # Move the temporary index file to the index fpath
             shutil.move(self.temp_file.name, self.idx_fpath)
 
     def write(self, obj, notes: List[str] = None):
@@ -155,7 +155,7 @@ class IndexedFile:
         if self.mode != "read":
             raise TypeError(f"You are attempting to read while mode={self.mode}!")
 
-        with open(self.fpath, "r") as file:
+        with open(self.corpus_fpath, "r") as file:
             for pos in self.start_pos_list:
                 file.seek(pos)
                 tokens = json.loads(file.readline())
@@ -286,13 +286,13 @@ def combine_with_separators(words, separators, min_length=4, min_words: int = 1)
     return list(all_combinations)
 
 
-def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):
+def get_file_index_path(corpus_fpath: Path, index_suffix: str = "_idx"):
     """
     Get the file index path based on the given file path and suffix.
 
     Parameters
     ----------
-    fpath : Path
+    corpus_fpath : Path
         Path to the file.
     index_suffix : str, optional
         Index suffix for the file, by default "_idx".
@@ -303,7 +303,10 @@ def get_file_index_path(fpath: Path, index_suffix: str = "_idx"):
         The file index path.
     """
 
-    return Path(fpath.parent) / f"{fpath.stem}{index_suffix}{''.join(fpath.suffixes)}"
+    return (
+        Path(corpus_fpath.parent)
+        / f"{corpus_fpath.stem}{index_suffix}{''.join(corpus_fpath.suffixes)}"
+    )
 
 
 def config_logging(log_path: Path = Path.cwd().parent.parent / "logs"):

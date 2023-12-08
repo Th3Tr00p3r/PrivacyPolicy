@@ -275,15 +275,15 @@ class SampleGenerator:
             List of labels.
         """
 
-        pos2keylabel = {}
+        pos2keylabel: Dict[int, Tuple[str, str]] = {}
         with open(self.indexed_file.idx_fpath, "r") as label_idx_file:
             for line in label_idx_file:
                 pos, key, label = json.loads(line.strip())
                 pos2keylabel[pos] = key, label
 
-        self._keys, self._labels = zip(*[pos2keylabel[pos] for pos in self.start_pos_list])
-        self._keys = list(self._keys)
-        self._labels = list(self._labels)
+        self._keys, self._labels = map(  # type: ignore
+            list, zip(*[pos2keylabel[pos] for pos in self.start_pos_list])
+        )
         return self._keys, self._labels
 
 

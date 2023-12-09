@@ -15,7 +15,6 @@
 
 # %% [markdown]
 # ### TODO: consider/checkout implementing use of `corpus_file`
-# ### TODO: try xgboost classification on the inferred training vectors (with feature selection) - I could use just D2VTransformer (Gensim) for this, attaching it to xgboost with sklearn in a pipeline
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 
@@ -537,8 +536,10 @@ from gensim.models.doc2vec import Doc2Vec
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
 if not SHOULD_FIT_MODEL:
-    classifier = D2VClassifier()
-    classifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
+    classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
+
+    # set threshold
+    classifier.threshold = 0.51
 
     # load originally used train/test sets as SampleGenerator objects
     train_set, test_set = classifier.generate_train_test_sets(cp.corpus_path)
@@ -744,6 +745,74 @@ else:
 # Since I recognize some of the URLs as having legitimately "good" privacy policies, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
 
 # %% [markdown]
+# ### 5.3.2 Choosing the best threshold
+#
+# An important model parameter which isn't directly used in training, but is extremely important for model scoring, is the decision threshold - the score above which a policy is classified as "good". To choose it wisely we can use cross-validation with the training set. Since it does not affect the innards of the model (not a hyperparameter of Doc2Vec), it can be chosen post-training, depending on desired model behaviour (precision/recall)
+
+# %% [markdown]
+# # TODO: JUST BUILD A STUPID LOOP FOR THIS - IMPLEMENT CV SPLITTING IN SampleGenerator and do CV on a linspace of thresholds (will be slow due to no multiprocessing?
+
+# %%
+classifier.score(test_set, test_set.labels)
+
+# %%
+from sklearn.model_selection import ValidationCurveDisplay
+
+for t in np.linspace(0.475, 0.525, 10):
+    logging.info(f"threshold = {t:.3f}")
+    score = classifier.score(test_set, test_set.labels, threshold=t)
+    logging.info(f"Bal. Acc. = {score:.2f}")
+
+#####################################
+
+# CV = 4
+
+# ValidationCurveDisplay.from_estimator(
+#    classifier,
+#     train_set,
+#     train_set.labels,
+#     fit_params={"nofit": True},
+#     param_name="threshold",
+#     param_range=np.linspace(0.475, 5.125, 10),
+#     cv=CV,
+# #     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+#     verbose=10,
+# )
+
+#####################################
+
+
+# from sklearn.model_selection import cross_validate
+
+# CV = 4
+
+# tic = time.perf_counter()
+# logging.info("Starting CV...")
+# scores = cross_validate(
+#     D2VClassifier(
+#         epochs=5,
+#         vector_size=84,
+#         window=5,
+#         negative=20,
+#         seed=SEED,
+#         #     workers=psutil.cpu_count(logical=False) - 1
+#     ),
+#     toy_train_set,
+#     toy_train_set.labels,
+#     cv=CV,
+#     #     return_train_score=True,
+#     verbose=10,
+#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+# )
+# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# print("Mean test score: ", np.nanmean(scores["test_score"]))
+# scores_df = pd.DataFrame(scores)
+# display(scores_df)
+
+# %%
+raise RuntimeError("STOP HERE!")
+
+# %% [markdown]
 # # 6. Attaching a Classifier
 # While it seems that the Doc2Vec model by itself is doing a fair job separating good privacy policies from bad ones, I am almost certain that more complex classification methods could make better use of the generated the vector embeddings as features for a binary classifier. Since I already have an transformer class for Doc2Vec, it should have been relatively easy to create a pipeline and attach an existing classifier.
 
@@ -758,8 +827,7 @@ else:
 # from ppa.estimators import D2VTransformer, ScoredIsolationForest
 
 # # load pretrained Doc2Vec model
-# d2vtrans = D2VTransformer()
-# d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
+# d2vtrans = D2VTransformer.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
 # # get original train set
 # original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
@@ -792,8 +860,7 @@ else:
 from ppa.estimators import D2VTransformer
 
 # load pretrained Doc2Vec model
-d2vtrans = D2VTransformer()
-d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
+d2vtrans = D2VTransformer.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
 # get original train set
 original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)

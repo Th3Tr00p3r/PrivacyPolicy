@@ -345,13 +345,16 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
             f"[{self.__class__.__name__}.save_model] Doc2Vec model successfully saved to {filepath}."
         )
 
-    def load_model(self, filepath: Path):
+    @classmethod
+    def load_model(cls, filepath: Path):
         """Doc."""
 
+        self = cls()
         self.model = Doc2Vec.load(str(filepath))
         logging.info(
             f"[{self.__class__.__name__}.load_model] Doc2Vec model successfully loaded from {filepath}."
         )
+        return self
 
     def generate_train_test_sets(self, corpus_fpath, **kwargs):
         """Doc."""
@@ -475,32 +478,6 @@ class D2VClassifier(D2VTransformer):
         mean_good = np.array([self.model.dv[k] for k in good_keys]).mean(axis=0)
         mean_bad = np.array([self.model.dv[k] for k in bad_keys]).mean(axis=0)
 
-        #        # getting mean labeled training vectors (inferred)
-        #        logging.info(
-        #            f"[{self.__class__.__name__}.fit] Getting good/bad mean vectors based on inference of labeled training samples..."
-        #        )
-        #        # get indices for all good/bad training vectors
-        #        label2num = {"unlabeled": np.nan, "good": -1, "bad": 1}
-        #        y_arr = np.array([label2num[label] for label in y])
-        #        good_idxs = y_arr == -1
-        #        bad_idxs = y_arr == 1
-        #        # trasform them separately
-        #        try:
-        #            X = cast(SampleGenerator, X)
-        #            X_good: SampleGenerator | List[TaggedDocument] = X.sample(
-        #                idxs=np.nonzero(good_idxs)[0]
-        #            )
-        #            X_bad: SampleGenerator | List[TaggedDocument] = X.sample(
-        #                idxs=np.nonzero(bad_idxs)[0]
-        #            )
-        #        except AttributeError:
-        #            # X is a list
-        #            X = cast(List[TaggedDocument], X)
-        #            X_good = [X[idx] for idx in np.nonzero(good_idxs)[0]]
-        #            X_bad = [X[idx] for idx in np.nonzero(bad_idxs)[0]]
-        #        mean_good = self.transform(X_good).mean(axis=0)
-        #        mean_bad = self.transform(X_bad).mean(axis=0)
-
         # add them as the "good"/"bad" model vectors, replacing if exist (if model was trained with those secondary tags)
         self.model.dv.add_vectors(["good", "bad"], [mean_good, mean_bad], replace=True)
 
@@ -510,6 +487,8 @@ class D2VClassifier(D2VTransformer):
             logging.info(
                 f"[{self.__class__.__name__}.fit] Training score (Balanced ACC.): {self.score(X, y, verbose=False)}"
             )
+
+        return self
 
     def decision_function(
         self, X: SampleGenerator | List[TaggedDocument] = None, X_vec: np.ndarray = None, **kwargs

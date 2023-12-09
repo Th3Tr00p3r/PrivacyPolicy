@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple, cast
 
 import numpy as np
+import xgboost as xgb
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import IsolationForest
@@ -22,6 +23,56 @@ from sklearn.metrics import (
 from ppa.display import Plotter
 from ppa.processing import SampleGenerator
 from ppa.utils import timer
+
+
+class ScoredXGBClassifier(xgb.XGBClassifier):
+    """
+    Extends xgboost.XGBClassifier to provide scoring and evaluation metrics.
+    """
+
+    def fit(self, X, y, *args, **kwargs):
+        """Doc."""
+        # transform y to [0, 1]
+        y_trans = np.array([1 if label == "good" else 0 for label in y])
+        # continue with super
+        return super().fit(X, y_trans, *args, **kwargs)
+
+    def score(self, X: np.ndarray, y: List[str], plot=False, **kwargs):
+        """
+        Compute the balanced accuracy score and other evaluation metrics.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Input features.
+        y : List[str]
+            Target labels.
+        plot : bool, optional
+            Flag to enable plotting, by default False.
+
+        Returns
+        -------
+        float
+            Balanced accuracy score.
+        """
+
+        # transform y to [0, 1]
+        y_trans = np.array([1 if label == "good" else 0 for label in y])
+
+        # predict and get scores
+        y_pred = self.predict(X)
+
+        #        # calculate individual accuracies # TODO: the "good_accuracy" is really just the recall
+        #        good_idxs = y_trans == 1
+        #        bad_idxs = y_trans == 0
+        #        good_accuracy = sum(y_pred[good_idxs] == y_trans[good_idxs]) / y_trans[good_idxs].size
+        #        bad_accuracy = sum(y_pred[bad_idxs] == y_trans[bad_idxs]) / y_trans[bad_idxs].size
+        #        logging.info(
+        #            f"[{self.__class__.__name__}.score] ACC: Good={good_accuracy:.2f}, Bad={bad_accuracy:.2f}."
+        #        )
+
+        # Compute balanced accuracy
+        return balanced_accuracy_score(y_trans, y_pred)
 
 
 class ScoredIsolationForest(IsolationForest):

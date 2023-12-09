@@ -263,15 +263,15 @@ display_wordcloud(filtered_dct, per_doc=True)
 # 5) The index file is used to add secondary tags to the `TaggedDocument` objects provided to Doc2Vec during training, and for synchronizing between policies and their labels during scoring of the model.
 
 # %%
-# from itertools import chain
+from itertools import chain
 
-# # N = 10
-# N = np.inf
+# N = 10
+N = np.inf
 
-# print(f"Getting URLs... ", end="")
-# # tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
-# tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
-# print(f"{len(tags):,} URLs obtained.")
+print(f"Getting URLs... ", end="")
+# tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
+tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
+print(f"{len(tags):,} URLs obtained.")
 
 # %% [markdown]
 # ETL
@@ -413,6 +413,9 @@ if SHOULD_FIT_MODEL:
     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
     classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model"))
 
+else:
+    print("Not fitting.")
+
 # %% [markdown]
 # Cross validate
 
@@ -536,6 +539,8 @@ MODEL_DIR_PATH = Path.cwd().parent / "models"
 if not SHOULD_FIT_MODEL:
     classifier = D2VClassifier()
     classifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
+
+    # load originally used train/test sets as SampleGenerator objects
     train_set, test_set = classifier.generate_train_test_sets(cp.corpus_path)
 
     # score the model
@@ -743,14 +748,48 @@ else:
 # While it seems that the Doc2Vec model by itself is doing a fair job separating good privacy policies from bad ones, I am almost certain that more complex classification methods could make better use of the generated the vector embeddings as features for a binary classifier. Since I already have an transformer class for Doc2Vec, it should have been relatively easy to create a pipeline and attach an existing classifier.
 
 # %% [markdown]
+# # TODO: after extensive hyperparameter tuning attempts with XGB, I cannot seem to be able to reach a balanced accuracy score of over 0.7, which is significantly less then what I reach with my simple unsupervised good/bad thresholding method (Doc2Vec) - I guess there's just not enough examples! I could try plotting the learnig curve for my best XGB model to put some weight behind that claim (see if I'm converging anywhere with more samples).
+
+# %% [markdown]
 # Let's start by creating a simple pipeline, see if t works at all and go from there. we can start by using the already trained mode (should be refitted when searching for optimal hyperparameters)
 
 # %%
-from sklearn.pipeline import Pipeline
-from ppa.estimators import D2VTransformer, ScoredIsolationForest
+# from sklearn.pipeline import Pipeline
+# from ppa.estimators import D2VTransformer, ScoredIsolationForest
 
-# from tempfile import mkdtemp
-# from shutil import rmtree
+# # load pretrained Doc2Vec model
+# d2vtrans = D2VTransformer()
+# d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
+
+# # get original train set
+# original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
+
+# # transform the train_set using d2vtrabs
+# original_train_set_vec = np.array(
+#     [d2vtrans.model.dv.get_vector(key) for key in original_train_set.keys]
+# )
+
+# # create a pipeline
+# pipe = Pipeline(
+#     [
+#         (
+#             "clf",
+#             ScoredIsolationForest(
+#                 n_estimators=50,
+#                 n_jobs=psutil.cpu_count(logical=False) - 1,
+#             ),
+#         )
+#     ],
+# )
+
+# # fit it to the pre-transformed train_set_vec
+# pipe.fit(original_train_set_vec)
+
+# %% [markdown]
+# or using the supervised state-of-the-art:
+
+# %%
+from ppa.estimators import D2VTransformer
 
 # load pretrained Doc2Vec model
 d2vtrans = D2VTransformer()
@@ -759,14 +798,30 @@ d2vtrans.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 # get original train set
 original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
 
-# transform the train_set using d2vtrabs
+# IsolationForest - transform the train_set using d2vtrabs
 original_train_set_vec = np.array(
     [d2vtrans.model.dv.get_vector(key) for key in original_train_set.keys]
 )
-# train_set_vec = d2vtrans.transform(train_set)
 
-# # create cache tempdir for caching fitted transformers
-# cachedir = mkdtemp()
+# # XGBClassifier - get just the labeled parts of it (since this is supervised classification, which must have labeles)
+# original_train_set_labeled, _ = original_train_set.get_labeled()
+# original_test_set_labeled, _ = original_test_set.get_labeled()
+
+# # transform the labeled train_set using d2vtrans
+# original_train_set_labeled_vec = np.array(
+#     [d2vtrans.model.dv.get_vector(key) for key in original_train_set_labeled.keys]
+# )
+
+# # transform the labeled test set using d2vtrans
+# original_test_set_labeled_vec = d2vtrans.transform(original_test_set_labeled)
+
+# %%
+from sklearn.pipeline import Pipeline
+
+# from ppa.estimators import ScoredXGBClassifier
+from ppa.estimators import ScoredIsolationForest
+
+# from sklearn.feature_selection import RFECV
 
 # create a pipeline
 pipe = Pipeline(
@@ -774,19 +829,156 @@ pipe = Pipeline(
         (
             "clf",
             ScoredIsolationForest(
-                n_estimators=50,
+                n_estimators=100,
+                max_samples=1.0,
+                max_features=1.0,
+                contamination=0.05,
+                bootstrap=False,
+                random_state=SEED,
                 n_jobs=psutil.cpu_count(logical=False) - 1,
             ),
         )
-    ],
-    #     memory=cachedir,
+        #         (
+        #             'sel',
+        #             RFECV(
+        #                 ScoredXGBClassifier(random_state=SEED),
+        #                 step=1,
+        #                 cv=4,
+        #                 min_features_to_select=1,
+        #             ),
+        #         ),
+        #         (
+        #             'clf',
+        #             ScoredXGBClassifier(
+        #                 booster="gbtree",
+        #                 max_depth=2,
+        #                 learning_rate=0.12,
+        #                 n_estimators=570,
+        #                 subsample=0.1,
+        #                 colsample_bytree=0.3,
+        #                 gamma=1.2,
+        #                 min_child_weight=1.48,
+        #                 random_state=SEED,
+        #             ),
+        #         ),
+    ]
 )
 
-# fit it to the pre-transformed train_set_vec
-pipe.fit(original_train_set_vec)
+# IsolationForest - fit it to the pre-transformed train_set_vec
+pipe.fit(original_train_set_vec, original_train_set.labels)
+# score on the test set
+print(pipe.score(original_train_set_vec, original_train_set.labels))
 
-# # Clear the cache directory when you don't need it anymore
-# rmtree(cachedir)
+# # XGBClassifier - fit it to the pre-transformed train_set_vec
+# pipe.fit(original_train_set_labeled_vec, original_train_set_labeled.labels)
+# # score on the test set
+# print(pipe.score(original_test_set_labeled_vec, original_test_set_labeled.labels))
+
+# Beep when done
+Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# %% [markdown]
+# plot learning curve for "best" model
+
+# %%
+# from sklearn.model_selection import LearningCurveDisplay
+
+# N_SPLITS = 4
+# MAX_CV_SAMPS = int(len(original_train_set_labeled_vec) - len(original_train_set_labeled_vec) / N_SPLITS)
+# train_sizes = np.logspace(2.0, np.log(MAX_CV_SAMPS) / np.log(10), num=50, dtype=int) # 100 to MAX_CV_SAMPS (log scale)
+# with Plotter() as ax:
+#     LearningCurveDisplay.from_estimator(
+#         pipe,
+#         original_train_set_labeled_vec,
+#         original_train_set_labeled.labels,
+#         train_sizes=train_sizes,
+#         cv=N_SPLITS,
+#         n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+# #         scoring=SCORING,
+#         ax=ax
+#     )
+
+# %% [markdown]
+# Hyperparamter search for XGBoost
+
+# %%
+# from sklearn.experimental import enable_halving_search_cv  # noqa
+# from sklearn.model_selection import HalvingRandomSearchCV, GridSearchCV, RandomizedSearchCV
+# from scipy.stats import randint, uniform, loguniform, norm
+
+# # Create a larger parameter grid with more combinations
+# param_dist = {
+#     'clf__max_depth': randint(2, 8),
+#     'clf__learning_rate': [0.01, 0.05, 0.1],
+#     'clf__n_estimators': randint(300, 601),
+#     'clf__subsample': norm(loc=0.1, scale=0.02),
+#     'clf__colsample_bytree': norm(loc=0.313, scale=0.02),
+#     'clf__gamma': norm(loc=1.0, scale=0.01),
+#     "clf__min_child_weight": norm(loc=1.5, scale=0.02),
+# }
+# # param_grid = {
+# #     'clf__max_depth': [2, 3],
+# #     'clf__learning_rate': [0.125, 0.15],
+# #     'clf__n_estimators': [450, 500, 550],
+# #     'clf__subsample': [0.1],
+# #     'clf__colsample_bytree': [0.3],
+# #     'clf__gamma': [1.2],
+# # #     "clf__booster": ["gbtree"],
+# #     "clf__min_child_weight": [1.3, 1.5, 1.7],
+# # }
+
+# N_SPLITS = 4
+
+# # Update the hyperparameter search to use the pipeline
+# search = RandomizedSearchCV(
+#     estimator=pipe,
+#     param_distributions=param_dist,
+# #     param_grid=param_grid,
+#     return_train_score=True,
+#     verbose=4,
+#     cv=N_SPLITS,
+#     n_jobs=min(N_SPLITS, psutil.cpu_count(logical=False) - 1),
+#     refit=True,
+#     random_state=SEED,
+#     n_iter=10,
+# )
+
+# # Fit the hyperparameter search on your training data
+# tic = time.perf_counter()
+# logging.info("Starting search...")
+# search.fit(original_train_set_labeled_vec, original_train_set_labeled.labels)
+# logging.info(f"Hyperparameter search timing: {(time.perf_counter() - tic)/60:.1f} mins")
+
+# # Print the best hyperparameters
+# logging.info(f"Best Hyperparameters: {search.best_params_}")
+
+# # display selected CV results, too
+# df = pd.DataFrame(search.cv_results_)
+# columns = [
+#     'rank_test_score',
+#     'mean_test_score',
+#     'mean_train_score',
+#     'param_clf__colsample_bytree',
+#     'param_clf__gamma',
+#     'param_clf__learning_rate',
+#     'param_clf__max_depth',
+#     'param_clf__min_child_weight',
+#     'param_clf__n_estimators',
+#     'param_clf__subsample',
+# ]
+# display(df[columns])
+
+# # Beep when search is done
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+
+# # Get the score of the best model on the test set
+# best_model_score = search.best_estimator_.score(
+#     original_test_set_labeled_vec, original_test_set_labeled.labels
+# )
+# logging.info(f"Best Model Score: {best_model_score}")
+
+# # Beep again when best model is ready
+# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # %%
 # # TESTESTEST
@@ -795,9 +987,9 @@ pipe.fit(original_train_set_vec)
 
 
 # data_dists = {
-# #     "normal": norm.rvs(loc=0, scale=1, size=10_000),
+#     "normal": norm.rvs(loc=0, scale=1, size=10_000),
 # #     "gamma": gamma.rvs(loc=50, a=1.5, scale=100, size=100_000),
-#     "nbinom": nbinom.rvs(1.5, 0.01, loc=50, size=10_000),
+# #     "nbinom": nbinom.rvs(1.5, 0.01, loc=50, size=10_000),
 # #     "exponential": expon.rvs(scale=0.1, size=10_000),
 # #     "uniform": uniform.rvs(loc=0.5, scale=0.5, size=10_000),
 # }
@@ -870,10 +1062,6 @@ logging.info(f"Best Model Score: {best_model_score}")
 # Beep again when best model is ready
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
-# %%
-Beep(1000, 500)
-raise RuntimeError("STOP HERE!")
-
 # %% [markdown]
 # # 7 Considering Upsampling and Pseudo-Labeling
 #
@@ -910,7 +1098,7 @@ Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 with Plotter(
     figsize=(10, 6),
     xlabel="Similarity Scores",
-    ylabel="Bin Counts (Density)",
+    ylabel="Bin Density",
     suptitle="Distribution of Similarity Scores",
 ) as ax:
 
@@ -953,8 +1141,8 @@ print(
     f"Unlabeled score range: {min(y_train_scores_unlabeled_sample):.2f}-{max(y_train_scores_unlabeled_sample):.2f}"
 )
 
-THRESH_GOOD = 0.56
-THRESH_BAD = 0.44
+THRESH_GOOD = 0.57
+THRESH_BAD = 0.42
 
 sampling_ratio = y_train_scores_unlabeled_sample.size / len(train_set)
 

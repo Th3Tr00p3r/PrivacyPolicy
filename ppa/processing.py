@@ -313,14 +313,6 @@ class CorpusProcessor:
         Initialize the CorpusProcessor after the object creation.
         """
 
-        # TESTESTEST
-        print(
-            self.corpus_fpath,
-            self.dict_fpath,
-            self.bigrams_fpath,
-        )
-        # /TESTESTEST
-
         try:
             self.dct = Dictionary.load(str(self.dict_fpath))
         except FileNotFoundError:
@@ -396,6 +388,22 @@ class CorpusProcessor:
         tokenized_doc = self._remove_consecutive_duplicates(tokenized_doc)
 
         return TaggedDocument(tokenized_doc, [domain_name])
+
+    def membership_test(self, tokenized_doc: List[str]) -> float:
+        """
+        Estimate if a tokenized document belongs to the type/group represented by the corpus.
+        The idea is that since the corpus Dictionary's IDs are ordered according to prevalence, outlier documents
+        or documents of a type different from the corpus will inevitably have either a different distribution of common tokens.
+        """
+
+        # compare the dfs of the dict to that of the document - the distribution should be similar?
+        token_id_counts = Counter([idx for idx in self.dct.doc2idx(tokenized_doc)])
+        median_common_id = np.median(
+            sorted(token_id_counts, key=lambda k: token_id_counts[k], reverse=True)[:10]
+        )
+        median2total_ratio = median_common_id / len(self.dct)
+        dict_factor = 1 - median2total_ratio
+        return dict_factor**2
 
     def _unite_bigrams(
         self,
@@ -568,7 +576,7 @@ class CorpusProcessor:
 
     def dict_info(self) -> None:
         """
-        Display information about the dictionary.
+        Gather & display information about the dictionary/corpus.
         """
 
         print(

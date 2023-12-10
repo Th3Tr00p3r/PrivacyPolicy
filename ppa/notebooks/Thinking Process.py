@@ -17,7 +17,7 @@
 # ### TODO: some URLs (from the wild), such as [this one](https://help.zedge.net/hc/en-us/articles/360028821051-Privacy-Policy), give "{'error': 'Must provide either a file path or a text together with a URL (for guessing the company name).'}"
 # ### TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
 # ### TODO: try including all policies (even long ones!) in the corpus? If that doesn't seriously hurt the results, it could be better for generalization.
-# ### TODO: when processing an out-of-corpus URL, I should raise an error and avoid clasifying if the contents do not appear to be a privacy policy! this could be estimated using the list of tokens and the corpus dictionary (e.g. only classify policies which would not be filtered!)
+# ### TODO: when processing an out-of-corpus URL, I should raise an error and avoid clasifying if the contents do not appear to be a privacy policy! this could be estimated using the list of tokens and the corpus dictionary (e.g. only classify policies which would not be filtered!) - I SHOULD CHECK IT'S SIMILARITY TO MEAN MODEL VECTOR!
 # ### TODO: consider/checkout implementing use of `corpus_file`
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
@@ -537,22 +537,24 @@ from gensim.models.doc2vec import Doc2Vec
 
 MODEL_DIR_PATH = Path.cwd().parent / "models"
 
+THRESH = 0.5075
+
 if not SHOULD_FIT_MODEL:
     classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
-
-    # set threshold
-    classifier.threshold = 0.51
 
     # load originally used train/test sets as SampleGenerator objects
     train_set, test_set = classifier.generate_train_test_sets()
 
     # score the model
-    print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
+    print("Balanced ACC: ", classifier.score(test_set, test_set.labels, threshold=THRESH))
 
     # Beep when done
     Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 else:
     print("Using recently fitted model.")
+
+# %%
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
@@ -804,9 +806,6 @@ for t in np.linspace(0.475, 0.525, 10):
 # print("Mean test score: ", np.nanmean(scores["test_score"]))
 # scores_df = pd.DataFrame(scores)
 # display(scores_df)
-
-# %%
-raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 6. Attaching a Classifier

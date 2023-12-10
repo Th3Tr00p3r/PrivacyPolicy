@@ -33,6 +33,13 @@ from ppa.utils import (
 RAW_DATA_FPATH = Path("tosdr_raw.json")
 DATABASE_FPATH = Path("tosdr_db.json")
 
+CURRENT_DPATH = Path(__file__).resolve().parent
+CORPUS_DPATH = CURRENT_DPATH / "corpus"
+
+CORPUS_FPATH = CORPUS_DPATH / "corpus.json"
+DICT_FPATH = CORPUS_DPATH / "dictionary.pkl"
+BIGRAMS_FPATH = CORPUS_DPATH / "bigrams.pkl"
+
 
 @dataclass
 class SampleGenerator:
@@ -293,7 +300,9 @@ class CorpusProcessor:
     Process and manipulate a corpus of text documents.
     """
 
-    save_dir_path: Path
+    corpus_fpath: Path = CORPUS_FPATH
+    dict_fpath: Path = DICT_FPATH
+    bigrams_fpath: Path = BIGRAMS_FPATH
 
     @property
     def total_samples(self):
@@ -304,17 +313,20 @@ class CorpusProcessor:
         Initialize the CorpusProcessor after the object creation.
         """
 
-        # file paths:
-        self.corpus_path = self.save_dir_path / "corpus.json"
-        self.dict_path = self.save_dir_path / "dictionary.pkl"
-        self.bigrams_path = self.save_dir_path / "bigrams.pkl"
+        # TESTESTEST
+        print(
+            self.corpus_fpath,
+            self.dict_fpath,
+            self.bigrams_fpath,
+        )
+        # /TESTESTEST
 
         try:
-            self.dct = Dictionary.load(str(self.dict_path))
+            self.dct = Dictionary.load(str(self.dict_fpath))
         except FileNotFoundError:
             logging.warning("Dictionary missing!")
         try:
-            self.bigram = Dictionary.load(str(self.bigrams_path))
+            self.bigram = Dictionary.load(str(self.bigrams_fpath))
         except FileNotFoundError:
             logging.warning("FrozenPhrases (bigrams) missing!")
 
@@ -345,7 +357,7 @@ class CorpusProcessor:
         )
         # Initialize a Dictionary object
         self.dct = Dictionary()
-        with IndexedFile(self.corpus_path, "write") as corpus_file:
+        with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
             for fidx, fpath in enumerate(fpaths):
                 # Track progress visually
@@ -367,7 +379,7 @@ class CorpusProcessor:
             self._filter_tokens(**kwargs)
 
         # save
-        self.dct.save(str(self.dict_path))
+        self.dct.save(str(self.dict_fpath))
 
     def process_document(self, doc: str, url: str):
         """Process a single document based on Dictionary and FrozenPhrases objects learned form entire corpus."""
@@ -417,14 +429,14 @@ class CorpusProcessor:
             delimiter="-",
         ).freeze()
         # save to disk
-        self.bigram.save(str(self.bigrams_path))
+        self.bigram.save(str(self.bigrams_fpath))
 
         n_unique_tokens_before = len(self.dct)
 
         # re-initialize the Dictionary
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._unite_bigrams] Re-processing...")
-        with IndexedFile(self.corpus_path, "write") as corpus_file:
+        with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -501,7 +513,7 @@ class CorpusProcessor:
         # re-initialize the Dictionary
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._filter_tokens] Filtering tokens and document lengths...")
-        with IndexedFile(self.corpus_path, "write") as corpus_file:
+        with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -533,7 +545,7 @@ class CorpusProcessor:
         )
         self.dct = Dictionary()
         logging.info("[CorpusProcessor._filter_tokens] Re-filtering tokens...")
-        with IndexedFile(self.corpus_path, "write") as corpus_file:
+        with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(self.generate_samples()):
                 # Track progress visually
@@ -581,7 +593,7 @@ class CorpusProcessor:
         logging.info(
             "[CorpusProcessor.add_label_tags] Adding labels to index file where available...",
         )
-        with IndexedFile(self.corpus_path, "reindex") as corpus_idx_file:
+        with IndexedFile(self.corpus_fpath, "reindex") as corpus_idx_file:
             # iterate over all existing keys (domain names)
             for key, (pos, _) in corpus_idx_file.key2poslabel.items():
                 # "rewrite" the index line with a new label, if exists in key2label dictionary
@@ -624,7 +636,7 @@ class CorpusProcessor:
         # Instantiate a reproducible (if used with integer seed) random number generator for shuffling
         rng = np.random.default_rng(seed)
 
-        fpath = fpath or self.corpus_path
+        fpath = fpath or self.corpus_fpath
 
         file_idx_path = get_file_index_path(fpath)
 
@@ -652,7 +664,7 @@ class CorpusProcessor:
         if n_samples < self.total_samples:
             sample_frac = n_samples / self.total_samples
             for label in index_dict.keys():
-                if not (upsampling and label == "good"):  # TESTESTEST
+                if not (upsampling and label == "good"):
                     n_reduced = round(label_counts_dict[label] * sample_frac)
                     index_dict[label] = index_dict[label][:n_reduced]
 

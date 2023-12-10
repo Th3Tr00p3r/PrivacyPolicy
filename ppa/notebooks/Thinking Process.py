@@ -131,9 +131,7 @@ CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
 if SHOULD_REPROCESS:
     # create a document processor with the paths
-    cp = CorpusProcessor(
-        CORPUS_DIR_PATH,
-    )
+    cp = CorpusProcessor()
     cp.process_corpus(
         policy_paths,
         lemmatize=True,
@@ -146,7 +144,7 @@ if SHOULD_REPROCESS:
         max_percentile=99,
     )
 else:
-    cp = CorpusProcessor(CORPUS_DIR_PATH)
+    cp = CorpusProcessor()
     print("Loaded existing CorpusProcessor")
 
 Beep(1000, 500)
@@ -546,7 +544,7 @@ if not SHOULD_FIT_MODEL:
     classifier.threshold = 0.51
 
     # load originally used train/test sets as SampleGenerator objects
-    train_set, test_set = classifier.generate_train_test_sets(cp.corpus_path)
+    train_set, test_set = classifier.generate_train_test_sets()
 
     # score the model
     print("Balanced ACC: ", classifier.score(test_set, test_set.labels))
@@ -753,12 +751,6 @@ else:
 #
 # An important model parameter which isn't directly used in training, but is extremely important for model scoring, is the decision threshold - the score above which a policy is classified as "good". To choose it wisely we can use cross-validation with the training set. Since it does not affect the innards of the model (not a hyperparameter of Doc2Vec), it can be chosen post-training, depending on desired model behaviour (precision/recall)
 
-# %% [markdown]
-# # TODO: JUST BUILD A STUPID LOOP FOR THIS - IMPLEMENT CV SPLITTING IN SampleGenerator and do CV on a linspace of thresholds (will be slow due to no multiprocessing?
-
-# %%
-classifier.score(test_set, test_set.labels)
-
 # %%
 from sklearn.model_selection import ValidationCurveDisplay
 
@@ -834,7 +826,7 @@ raise RuntimeError("STOP HERE!")
 # d2vtrans = D2VTransformer.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
 # # get original train set
-# original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
+# original_train_set, original_test_set = d2vtrans.generate_train_test_sets()
 
 # # transform the train_set using d2vtrabs
 # original_train_set_vec = np.array(
@@ -867,7 +859,7 @@ from ppa.estimators import D2VTransformer
 d2vtrans = D2VTransformer.load_model(Path("D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v.model"))
 
 # get original train set
-original_train_set, original_test_set = d2vtrans.generate_train_test_sets(cp.corpus_path)
+original_train_set, original_test_set = d2vtrans.generate_train_test_sets()
 
 # IsolationForest - transform the train_set using d2vtrabs
 original_train_set_vec = np.array(

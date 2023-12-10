@@ -21,7 +21,7 @@ from sklearn.metrics import (
 )
 
 from ppa.display import Plotter
-from ppa.processing import SampleGenerator
+from ppa.processing import CORPUS_FPATH, SampleGenerator
 from ppa.utils import timer
 
 
@@ -356,7 +356,7 @@ class D2VTransformer(BaseEstimator, TransformerMixin):
         )
         return self
 
-    def generate_train_test_sets(self, corpus_fpath, **kwargs):
+    def generate_train_test_sets(self, corpus_fpath=CORPUS_FPATH, **kwargs):
         """Doc."""
 
         return SampleGenerator(
@@ -433,8 +433,25 @@ class D2VClassifier(D2VTransformer):
         # initialize the transformer base class with the same arguments
         super().__init__(**kwargs)
 
+        # initialize empty _label2keys (obtained through property methods)
+        self._label2keys: Dict[str, List[str]] = {}
+
+    @property
+    def label2keys(self):
+        """Doc."""
+
+        # regenerate if still empty
+        if not self._label2keys:
+            X, _ = self.generate_train_test_sets()
+            for key, label in zip(X.keys, X.labels):
+                try:
+                    self._label2keys[label].append(key)
+                except KeyError:
+                    self._label2keys[label] = [key]
+        return self._label2keys
+
     @timer(1000)
-    def fit(self, X: SampleGenerator | List[TaggedDocument], y: List[str]):
+    def fit(self, X, y: List[str]):
         """
         Fit the Doc2Vec Transformer, then build good/bad mean inferred vectors for model.
         Optionally, score the training.
@@ -454,32 +471,6 @@ class D2VClassifier(D2VTransformer):
 
         # train the model using the parent transformer class
         super().fit(X, y, should_time=False)
-
-        # collect all labeled document keys (for scoring)
-        good_keys = []
-        bad_keys = []
-        try:
-            X = cast(SampleGenerator, X)
-            for key, label in zip(X.keys, X.labels):
-                if label == "good":
-                    good_keys.append(key)
-                elif label == "bad":
-                    bad_keys.append(key)
-        except AttributeError:
-            # X is a list
-            X = cast(List[TaggedDocument], X)
-            for idx, label in enumerate(y):
-                if label == "good":
-                    good_keys.append(X[idx].tags[0])
-                elif label == "bad":
-                    bad_keys.append(X[idx].tags[0])
-
-        # get the mean vectors from the model using the collected keys
-        mean_good = np.array([self.model.dv[k] for k in good_keys]).mean(axis=0)
-        mean_bad = np.array([self.model.dv[k] for k in bad_keys]).mean(axis=0)
-
-        # add them as the "good"/"bad" model vectors, replacing if exist (if model was trained with those secondary tags)
-        self.model.dv.add_vectors(["good", "bad"], [mean_good, mean_bad], replace=True)
 
         # calculate training score (optional)
         if self.train_score:
@@ -513,9 +504,13 @@ class D2VClassifier(D2VTransformer):
         if X_vec is None:
             X_vec = self.transform(X, **kwargs)
 
+        # get the mean vectors from the model using the collected keys
+        mean_good = np.array([self.model.dv[k] for k in self.label2keys["good"]]).mean(axis=0)
+        mean_bad = np.array([self.model.dv[k] for k in self.label2keys["bad"]]).mean(axis=0)
+
         # Use similaities between mean good/bad train vectors and samples to compute scores
-        good_sims = self.model.dv.cosine_similarities(self.model.dv["good"], X_vec)
-        bad_sims = self.model.dv.cosine_similarities(self.model.dv["bad"], X_vec)
+        good_sims = self.model.dv.cosine_similarities(mean_good, X_vec)
+        bad_sims = self.model.dv.cosine_similarities(mean_bad, X_vec)
         # scale to [0, 1] range and return scores
         return ((good_sims - bad_sims) + 2) / 4
 

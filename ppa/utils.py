@@ -2,6 +2,7 @@ import asyncio
 import functools
 import json
 import logging
+import platform
 import random
 import re
 import shutil
@@ -12,7 +13,9 @@ from itertools import combinations, permutations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Callable, List
-from winsound import Beep
+
+if platform.system() == "Windows":
+    from winsound import Beep
 
 import yaml  # type: ignore
 
@@ -384,7 +387,7 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
                         logging.info(
                             f"***TIMER*** Function '{func.__name__}()' took {elapsed_time_ms * (1e-3 if in_s else 1):.2f} {'s' if in_s else 'ms'}.\n"
                         )
-                        if beep:
+                        if beep and platform.system() == "Windows":
                             Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
                     return value
                 else:
@@ -422,7 +425,7 @@ def timer(threshold_ms: float = 0.0, beep=True) -> Callable:
                         logging.info(
                             f"***TIMER*** Function '{func.__name__}()' took {elapsed_time_ms * (1e-3 if in_s else 1):.2f} {'s' if in_s else 'ms'}."
                         )
-                        if beep:
+                        if beep and platform.system() == "Windows":
                             Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
                     return value
                 else:

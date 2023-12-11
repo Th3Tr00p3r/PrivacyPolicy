@@ -7,7 +7,6 @@ from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple
-from winsound import Beep
 
 import aiofiles  # type: ignore
 import gensim
@@ -991,9 +990,6 @@ class ToSDRDataLoader:
         # Extract fresh raw data
         if not self.raw_data_fpath.exists() or force_extract:
             await self._extract_data(queries, **kwargs)
-            # Optionally beep when done (Assuming Windows OS)
-            if beep:
-                Beep(1000, 500)
 
         # Transform and load afresh
         if not self.database_fpath.exists() or force_transform:
@@ -1033,6 +1029,7 @@ class ToSDRDataLoader:
 
         return df
 
+    @timer(1000, beep=True)
     async def _extract_data(self, queries: List[str], timeout_s=10, **kwargs):
         """
         Extract data from the ToSDR API asynchronously and write it to a file.

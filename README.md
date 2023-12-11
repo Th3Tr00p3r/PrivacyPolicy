@@ -1,5 +1,5 @@
 ---
-title: Delete Me
+title: Privacy Policy Analyzer
 emoji: 👁️‍🗨️
 colorFrom: yellow
 colorTo: gray

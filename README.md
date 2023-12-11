@@ -1,3 +1,9 @@
+---
+title: PPA
+app_file: ppa_gradio.py
+sdk: gradio
+sdk_version: 4.8.0
+---
 # Privacy Policy Analyzer (PPA)
 [![Maintenance](https://img.shields.io/maintenance/yes/2023)](https://github.com/Th3Tr00p3r/PrivacyPolicy)
 [![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)

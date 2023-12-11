@@ -12,32 +12,37 @@ processor = CorpusProcessor()
 classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
 
 
-# TODO: move this general function to a more generally named script, and import it here from here (as in ppa_cli/flask.py)
 def classify_url(url: str, member_thresh: float = 0.6):
     try:
         doc_text = trafilatura.extract(trafilatura.fetch_url(url))
         td, removed_ratio = processor.process_document(doc_text, url=url)
         membership_score = processor.membership_test(td.words, removed_ratio)
+        membership_result = f"{membership_score:.2f} ({member_thresh:.2f})"
         if membership_score > member_thresh:
             label, scores = classifier.predict([td], get_scores=True)
-            result = f"Class: {'good' if label == -1 else 'bad'}. Score: {scores[0]:.2f} (threshold={classifier.threshold:.2f}). Membership score: {membership_score:.2f} (threshold={member_thresh:.2f})."
+            class_result = "Good" if label == -1 else "Bad"
+            score_result = f"{scores[0]:.2f} ({classifier.threshold:.2f})"
+            return class_result, score_result, membership_result, None
         else:
-            # Judged not to be a privac policy
-            result = f"[Error] '{td.tags[0]}' - not a privacy policy! (membership score={membership_score:.2f})"
-        return result
+            error_result = f"'{td.tags[0]}' - not a privacy policy!"
+            return "N/A", None, membership_result, error_result
     except Exception as e:
-        return {"error": str(e)}
+        return None, None, f"Error: {str(e)}"
 
 
 if __name__ == "__main__":
-
+    # Define the GUI
     iface = gr.Interface(
         fn=classify_url,
-        inputs="text",
-        outputs="text",
+        inputs=[gr.Textbox(label="URL")],
+        outputs=[
+            gr.Textbox(label="Class"),
+            gr.Textbox(label="Decision Score (threshold)"),
+            gr.Textbox(label="Membership Score (threshold)"),
+            gr.Textbox(label="Error Message"),
+        ],
         title="Privacy Policy Binary Classifier",
-        description="Enter a URL of a privacy policy to classify its contents as 'good' or 'bad'.",
+        description="Enter privacy-policy URL to classify its contents as 'good' or 'bad'.",
     )
-
-    # Deploy the Gradio interface
+    # Launch locally and get a shareable link
     iface.launch(share=True)

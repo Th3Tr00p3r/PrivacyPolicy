@@ -1,3 +1,13 @@
+---
+title: Delete Me
+emoji: 👁️‍🗨️
+colorFrom: yellow
+colorTo: gray
+sdk: gradio
+sdk_version: 4.8.0
+app_file: app.py
+pinned: false
+---
 # Privacy Policy Analyzer (PPA)
 [![Maintenance](https://img.shields.io/maintenance/yes/2023)](https://github.com/Th3Tr00p3r/PrivacyPolicy)
 [![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)

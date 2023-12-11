@@ -1,13 +1,8 @@
----
-title: PPA
-app_file: ppa_gradio.py
-sdk: gradio
-sdk_version: 4.8.0
----
 # Privacy Policy Analyzer (PPA)
 [![Maintenance](https://img.shields.io/maintenance/yes/2023)](https://github.com/Th3Tr00p3r/PrivacyPolicy)
 [![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)
 [![Python Versions](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/)
+[![HuggingFace/Gradio](https://img.shields.io/badge/deployment-gradio-orange)](https://huggingface.co/spaces/molehillnest/PPA)
 
 ## Overview
 PPA is an ongoing project aimed at simplifying the complexities of privacy policies through Natural Language Processing (NLP) and Machine Learning techniques. The goal is to facilitate a quick assessment of privacy policies, aiding users in understanding the policies they often consent to without a thorough read. This project explores data extraction, text processing, and Doc2Vec-based classification to categorize policies as either 'good' or 'bad' in terms of their privacy content. This repository showcases various stages of the development process, from data acquisition to model evaluation.

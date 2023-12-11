@@ -30,17 +30,25 @@ from ppa.utils import (
     timer,
 )
 
-nltk.download("wordnet")
-
-RAW_DATA_FPATH = Path("tosdr_raw.json")
-DATABASE_FPATH = Path("tosdr_db.json")
-
+# Define paths
 CURRENT_DPATH = Path(__file__).resolve().parent
-CORPUS_DPATH = CURRENT_DPATH / "corpus"
 
+RAW_DATA_FPATH = CURRENT_DPATH / "notebooks" / "tosdr_raw.json"
+DATABASE_FPATH = CURRENT_DPATH / "notebooks" / "tosdr_db.json"
+
+CORPUS_DPATH = CURRENT_DPATH / "corpus"
 CORPUS_FPATH = CORPUS_DPATH / "corpus.json"
 DICT_FPATH = CORPUS_DPATH / "dictionary.pkl"
 BIGRAMS_FPATH = CORPUS_DPATH / "bigrams.pkl"
+
+# Download NLTK datasets (if necessary)
+# Check if wordnet dataset is present, if not, download it
+if not (CORPUS_DPATH / "corpora" / "wordnet.zip").exists():
+    nltk.download("wordnet", download_dir=CORPUS_DPATH)
+
+# Check if stopwords dataset is present, if not, download it
+if not (CORPUS_DPATH / "corpora" / "stopwords.zip").exists():
+    nltk.download("stopwords", download_dir=CORPUS_DPATH)
 
 
 @dataclass
@@ -387,11 +395,12 @@ class CorpusProcessor:
             token_ for token_ in bigram_tokenized_doc if self.dct.token2id.get(token_) is not None
         ]
 
+        #        print(f"N TOKENS: {len(bigram_tokenized_doc)}") # TESTESTEST
+
         # calculate ratio of removed/kept tokens (helps with identifying out-of-group documents)
         removed_ratio = (len(bigram_tokenized_doc) - len(filtered_tokenized_doc)) / len(
             bigram_tokenized_doc
         )
-        #        print(f"{len(bigram_tokenized_doc) - len(filtered_tokenized_doc):,}/{len(bigram_tokenized_doc)} tokens ({(len(bigram_tokenized_doc) - len(filtered_tokenized_doc))/len(bigram_tokenized_doc):.2%}) removed during dictionary filtering.") # TESTESTEST
 
         # remove consecutive duplicates after filtering
         final_tokenized_doc = self._remove_consecutive_duplicates(filtered_tokenized_doc)
@@ -405,14 +414,23 @@ class CorpusProcessor:
         or documents of a type different from the corpus will inevitably have either a different distribution of common tokens.
         """
 
-        # In-dictionary factor
+        # Length ratio (penalizing short final lengths)
+        len_ratio = 4 / len(tokenized_doc)
+
+        # In-dictionary factor (penalzing documents with token requencies differing from those in the Dictionary)
         token_id_counts = Counter([idx for idx in self.dct.doc2idx(tokenized_doc)])
         median_common_id = np.median(
             sorted(token_id_counts, key=lambda k: token_id_counts[k], reverse=True)[:10]
         )
         median2total_ratio = median_common_id / len(self.dct)
 
-        return np.exp(-(median2total_ratio + (removed_ratio / 0.1)))
+        #        # TESTESTEST
+        #        print(f"removed_ratio: {removed_ratio}")
+        #        print(f"median_common_id: {median_common_id}")
+        #        # /TESTESTEST
+
+        # combine factors in decaying exponent
+        return np.exp(-(median2total_ratio + removed_ratio + len_ratio))
 
     def _unite_bigrams(
         self,

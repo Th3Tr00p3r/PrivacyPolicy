@@ -9,12 +9,6 @@
 # Log folder
 logs/
 
-# model folder
-models/
-
-# corpus folder
-corpus/
-
 # Gradio's 'flagged' folder
 flagged/
 

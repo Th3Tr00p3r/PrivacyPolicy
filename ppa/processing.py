@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple
 import aiofiles  # type: ignore
 import gensim
 import httpx
+import nltk
 import numpy as np
 import pandas as pd
 import wordninja
@@ -28,6 +29,8 @@ from ppa.utils import (
     longest_most_common_phrase,
     timer,
 )
+
+nltk.download("wordnet")
 
 RAW_DATA_FPATH = Path("tosdr_raw.json")
 DATABASE_FPATH = Path("tosdr_db.json")

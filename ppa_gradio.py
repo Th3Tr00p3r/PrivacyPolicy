@@ -44,5 +44,5 @@ if __name__ == "__main__":
         title="Privacy Policy Binary Classifier",
         description="Enter privacy-policy URL to classify its contents as 'good' or 'bad'.",
     )
-    # Launch locally and get a shareable link
-    iface.launch(share=True)
+    # Launch locally
+    iface.launch()

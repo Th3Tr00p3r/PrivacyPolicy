@@ -379,31 +379,38 @@ class CorpusProcessor:
         # tokenize
         tokenized_doc, domain_name = self._preprocess_document(doc=doc, url=url)
         # find and unite bigrams
-        tokenized_doc = self.bigram[tokenized_doc]
+        bigram_tokenized_doc = self.bigram[tokenized_doc]
         # filter according to master Dictionary
-        tokenized_doc = [
-            token_ for token_ in tokenized_doc if self.dct.token2id.get(token_) is not None
+        filtered_tokenized_doc = [
+            token_ for token_ in bigram_tokenized_doc if self.dct.token2id.get(token_) is not None
         ]
+
+        # calculate ratio of removed/kept tokens (helps with identifying out-of-group documents)
+        removed_ratio = (len(bigram_tokenized_doc) - len(filtered_tokenized_doc)) / len(
+            bigram_tokenized_doc
+        )
+        #        print(f"{len(bigram_tokenized_doc) - len(filtered_tokenized_doc):,}/{len(bigram_tokenized_doc)} tokens ({(len(bigram_tokenized_doc) - len(filtered_tokenized_doc))/len(bigram_tokenized_doc):.2%}) removed during dictionary filtering.") # TESTESTEST
+
         # remove consecutive duplicates after filtering
-        tokenized_doc = self._remove_consecutive_duplicates(tokenized_doc)
+        final_tokenized_doc = self._remove_consecutive_duplicates(filtered_tokenized_doc)
 
-        return TaggedDocument(tokenized_doc, [domain_name])
+        return TaggedDocument(final_tokenized_doc, [domain_name]), removed_ratio
 
-    def membership_test(self, tokenized_doc: List[str]) -> float:
+    def membership_test(self, tokenized_doc: List[str], removed_ratio: float) -> float:
         """
         Estimate if a tokenized document belongs to the type/group represented by the corpus.
         The idea is that since the corpus Dictionary's IDs are ordered according to prevalence, outlier documents
         or documents of a type different from the corpus will inevitably have either a different distribution of common tokens.
         """
 
-        # compare the dfs of the dict to that of the document - the distribution should be similar?
+        # In-dictionary factor
         token_id_counts = Counter([idx for idx in self.dct.doc2idx(tokenized_doc)])
         median_common_id = np.median(
             sorted(token_id_counts, key=lambda k: token_id_counts[k], reverse=True)[:10]
         )
         median2total_ratio = median_common_id / len(self.dct)
-        dict_factor = 1 - median2total_ratio
-        return dict_factor**2
+
+        return np.exp(-(median2total_ratio + (removed_ratio / 0.1)))
 
     def _unite_bigrams(
         self,

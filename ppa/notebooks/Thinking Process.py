@@ -14,10 +14,10 @@
 # ---
 
 # %% [markdown]
-# ### TODO: some URLs (from the wild), such as [this one](https://help.zedge.net/hc/en-us/articles/360028821051-Privacy-Policy), give "{'error': 'Must provide either a file path or a text together with a URL (for guessing the company name).'}"
+# ### TODO: Create a premalink to the model (see gradio-huggingface thing - is it free?) and place it in the GitHub repo's README file
+# ### TODO: Some URLs (from the wild), such as [this one](https://help.zedge.net/hc/en-us/articles/360028821051-Privacy-Policy), give "{'error': 'Must provide either a file path or a text together with a URL (for guessing the company name).'}"
 # ### TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
 # ### TODO: try including all policies (even long ones!) in the corpus? If that doesn't seriously hurt the results, it could be better for generalization.
-# ### TODO: when processing an out-of-corpus URL, I should raise an error and avoid clasifying if the contents do not appear to be a privacy policy! this could be estimated using the list of tokens and the corpus dictionary (e.g. only classify policies which would not be filtered!) - I SHOULD CHECK IT'S SIMILARITY TO MEAN MODEL VECTOR!
 # ### TODO: consider/checkout implementing use of `corpus_file`
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.

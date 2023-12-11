@@ -42,6 +42,7 @@ DICT_FPATH = CORPUS_DPATH / "dictionary.pkl"
 BIGRAMS_FPATH = CORPUS_DPATH / "bigrams.pkl"
 
 # Download NLTK datasets (if necessary)
+nltk.data.path.append(str(CORPUS_DPATH))  # set the path to the location in the repo
 # Check if wordnet dataset is present, if not, download it
 if not (CORPUS_DPATH / "corpora" / "wordnet.zip").exists():
     nltk.download("wordnet", download_dir=CORPUS_DPATH)

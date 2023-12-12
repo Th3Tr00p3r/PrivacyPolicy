@@ -12,6 +12,9 @@ logs/
 # Gradio's 'flagged' folder
 flagged/
 
+# Processed Data file (not needed for ready models)
+corpus.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

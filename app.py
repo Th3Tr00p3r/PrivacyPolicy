@@ -2,7 +2,9 @@ from pathlib import Path
 
 import gradio as gr
 import trafilatura
+from gensim.corpora import Dictionary
 
+from ppa.display import display_wordcloud
 from ppa.estimators import D2VClassifier
 from ppa.processing import CorpusProcessor
 
@@ -12,7 +14,7 @@ processor = CorpusProcessor()
 classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
 
 
-def classify_url(url: str, member_thresh: float = 0.9):
+def classify_url(url: str, member_thresh: float = 0.9, plot=True):
     try:
         doc_text = trafilatura.extract(trafilatura.fetch_url(url))
         td, removed_ratio = processor.process_document(doc_text, url=url)
@@ -22,12 +24,15 @@ def classify_url(url: str, member_thresh: float = 0.9):
             label, scores = classifier.predict([td], get_scores=True)
             class_result = "Good" if label == -1 else "Bad"
             score_result = f"{scores[0]:.2f} ({classifier.threshold:.2f})"
-            return class_result, score_result, membership_result, None
+            wordcloud_fig = (
+                display_wordcloud(Dictionary([td.words]), should_plot=False) if plot else None
+            )
+            return class_result, score_result, membership_result, None, wordcloud_fig
         else:
             error_result = f"'{td.tags[0]}' - not a privacy policy!"
-            return "N/A", None, membership_result, error_result
+            return "N/A", None, membership_result, error_result, None
     except Exception as exc:
-        return None, None, None, str(exc)
+        return None, None, None, str(exc), None
 
 
 if __name__ == "__main__":
@@ -40,6 +45,7 @@ if __name__ == "__main__":
             gr.Textbox(label="Decision Score (threshold)"),
             gr.Textbox(label="Membership Score (threshold)"),
             gr.Textbox(label="Error Message"),
+            gr.Plot(label="Word-Cloud"),
         ],
         title="Privacy Policy Binary Classifier",
         description="Enter privacy-policy URL to classify its contents as 'good' or 'bad'.",

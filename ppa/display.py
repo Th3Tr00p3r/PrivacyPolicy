@@ -303,7 +303,7 @@ def display_dim_reduction(arr2d, name: str, **kwargs):
     display_scatter(arr2d, title=f"{name} Visualization", **{**kwargs, **axis_labels_dict})
 
 
-def display_wordcloud(dct: Dictionary | Dict[str, int], per_doc: bool = False):
+def display_wordcloud(dct: Dictionary, per_doc: bool = False, should_plot=True):
     """
     Display a word cloud.
 
@@ -333,10 +333,14 @@ def display_wordcloud(dct: Dictionary | Dict[str, int], per_doc: bool = False):
     wordcloud.generate_from_frequencies(word_count_dict)
 
     # Display the word cloud using matplotlib
-    plt.figure(figsize=(10, 5))
+    fig = plt.figure(figsize=(10, 5))
     plt.imshow(wordcloud, interpolation="bilinear")
     plt.axis("off")
-    plt.show()
+
+    if should_plot:
+        plt.show()
+
+    return fig
 
 
 def force_aspect(ax, aspect=1) -> None:

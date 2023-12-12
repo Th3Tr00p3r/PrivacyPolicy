@@ -20,15 +20,19 @@ PPA is an ongoing project aimed at simplifying the complexities of privacy polic
 ## Thinking Process
 The project begins with data gathering from the paper available at [Princeton's PrivacyPolicies](https://privacypolicies.cs.princeton.edu/), which provides a substantial database of privacy policies. These policies are gathered and processed, leveraging techniques in ETL (Extract, Transform, Load) to clean, tokenize, and create vector embeddings for analysis. While most policies lack explicit labels, a small subset (approximately 1%) has secondary tags denoting their quality as 'good' or 'bad'.
 
-The D2VClassifier employs an unsupervised learning approach using Doc2Vec, trained with secondary tags where available. For these labeled policies, it computes mean vectors for each tag ('good' and 'bad'). When presented with a new document, the model infers a vector representation and calculates its similarity to the mean vectors. The resulting score reflects the closeness of the document to the learned 'good' and 'bad' representations.
+The D2VClassifier employs a hybrid unsupervised-learning/supervised inference approach, based on Doc2Vec. First, the Doc2Vec model is trained on the entire corpus. For the training set policies which do posses labeles, it computes mean vectors for each class ('good' and 'bad'). When presented with a new document, the Doc2Vec model infers a vector representation, and the classifier calculates its similarity to the mean vectors. The resulting score reflects the closeness of the document to the learned 'good' and 'bad' representations.
 
 The classification decision is determined by thresholding this similarity score. If the similarity score exceeds a predefined threshold, the document is classified as 'good'; otherwise, it's classified as 'bad'. This methodology enables the model to infer the quality of policies based on their similarity to the limited labeled data available, allowing a binary classification output.
 
+In order to differentiate between privacy policies and other types of documents a few heuristics are employed, including distribution of common words, document length, and token filtering ratio against the training corpus dictionary.
+
 ## Features
 - **CorpusProcessor**: Handles text processing, tokenization, and indexing for the Doc2Vec model.
-- **SampleGenerator (IndexedFile)**: Assists in handling the training and testing data, ensuring balanced representation for model training.
+- **SampleGenerator**: Assists in handling the training and testing data, ensuring balanced representation for model training while ensuring a one-at-a time presence of documents in RAM.
 - **D2VClassifier**: Integrates with scikit-learn for hyperparameter tuning and pipeline connectivity, utilizing specialized text corpus retrieval for Doc2Vec.
+- **IndexedFile**: Facillitates working with on-disk data, namely enabeling external shuffling via file start position indexing of data samples. Used with the above classes.
 - **CLI Script**: Includes a CLI script named `ppa_cli.py` for running the trained model to classify content fetched from URLs. The script should be placed within the same directory as the `ppa` package.
+- **Deployed App**: The model is deployed using [Gradio](https://www.gradio.app/) via the `app.py` file, offering a user-friendly interface for policy analysis.
 
 ## Usage
 ### Requirements

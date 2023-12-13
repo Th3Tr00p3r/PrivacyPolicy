@@ -101,8 +101,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # limit number of policies in corpus
-# N_PATHS = 100_000_000
-N_PATHS = 1_000
+N_PATHS = 100_000_000
+# N_PATHS = 1_000
 
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
@@ -125,8 +125,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
@@ -150,9 +150,6 @@ else:
     print("Loaded existing CorpusProcessor")
 
 Beep(1000, 500)
-
-# %%
-raise RuntimeError("STOP HERE")
 
 # %% [markdown]
 # # 2. Preliminary EDA
@@ -283,21 +280,21 @@ print(f"{len(tags):,} URLs obtained.")
 # ETL
 
 # %%
-# import asyncio
-# from ppa.processing import ToSDRDataLoader
+import asyncio
+from ppa.processing import ToSDRDataLoader
 
-# # get all URLs for which I have PPs
+# get all URLs for which I have PPs
 
 
-# # set flags
-# # FORCE_EXT = True
-# FORCE_EXT = False
+# set flags
+# FORCE_EXT = True
+FORCE_EXT = False
 
-# # FORCE_TRANS = True
-# FORCE_TRANS = False
+# FORCE_TRANS = True
+FORCE_TRANS = False
 
-# # Instantiate data-loading object
-# data_loader = ToSDRDataLoader()
+# Instantiate data-loading object
+data_loader = ToSDRDataLoader()
 
 # ratings_df = await data_loader.load_data(  # type: ignore
 #     tags,
@@ -305,53 +302,54 @@ print(f"{len(tags):,} URLs obtained.")
 #     force_extract=FORCE_EXT,
 #     force_transform=FORCE_TRANS,
 # )
-# # ratings_df = pd.DataFrame({})
-# # raise ValueError("Uncomment the 'await'!!!")
+ratings_df = pd.DataFrame({})
+raise ValueError("Uncomment the 'await'!!!")
 
-# Beep(1000, 500)
-# print("Done.")
+Beep(1000, 500)
+print("Done.")
 
-# # how many datapoints are there
-# print("Number of records: ", len(ratings_df))
+# how many datapoints are there
+print("Number of records: ", len(ratings_df))
 
-# # how many labels do I have
-# print("Number of labels: ", ratings_df["rating"].notna().sum())
+# how many labels do I have
+print("Number of labels: ", ratings_df["rating"].notna().sum())
 
-# # how many possible duplicates do I have
-# print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
+# how many possible duplicates do I have
+print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
 
-# ratings_df.sample(10)
+ratings_df.sample(10)
 
 # %% [markdown]
 # ## 3.2 Checking for Bias in Labeled Data
 
 # %%
-# letter_count_dict = dict(sorted(Counter(ratings_df["rating"]).items()))
+letter_count_dict = dict(sorted(Counter(ratings_df["rating"]).items()))
 
-# with Plotter(suptitle="Letter Rating Counts", xlabel="Letter Rating", ylabel="Counts") as ax:
-#     ax.bar(letter_count_dict.keys(), letter_count_dict.values())
+with Plotter(suptitle="Letter Rating Counts", xlabel="Letter Rating", ylabel="Counts") as ax:
+    ax.bar(letter_count_dict.keys(), letter_count_dict.values())
+
 
 # %% [markdown]
 # As one might expect, good privacy policies are hard to come by. As such, I will, for now, label privacy policies as either 'good' ('A' or 'B' rating) vs. 'bad' ('C', 'D', or 'E' rating):
 
 # %%
-# def relabel_rating(rating: str):
-#     """Doc."""
+def relabel_rating(rating: str):
+    """Doc."""
 
-#     if rating in "AB":
-#         return "good"
-#     elif rating in "CDE":
-#         return "bad"
-#     else:
-#         return rating
+    if rating in "AB":
+        return "good"
+    elif rating in "CDE":
+        return "bad"
+    else:
+        return rating
 
 
-# ratings_df["label"] = ratings_df["rating"].apply(relabel_rating)
+ratings_df["label"] = ratings_df["rating"].apply(relabel_rating)
 
-# label_count_dict = dict(sorted(Counter(ratings_df["label"]).items()))
+label_count_dict = dict(sorted(Counter(ratings_df["label"]).items()))
 
-# with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
-#     ax.bar(label_count_dict.keys(), label_count_dict.values())
+with Plotter(suptitle="Label Counts", xlabel="Label", ylabel="Counts") as ax:
+    ax.bar(label_count_dict.keys(), label_count_dict.values())
 
 # %% [markdown]
 # Perhaps this classification could work as anomaly detection ('good' policies being the anomaly)?
@@ -360,9 +358,11 @@ print(f"{len(tags):,} URLs obtained.")
 # Finally, let's update the data index file with labels for URLs which have them:
 
 # %%
-# if SHOULD_REPROCESS:
-#     url2label = ratings_df.set_index("tag")["label"].to_dict()
-#     cp.add_label_tags(url2label)
+if SHOULD_REPROCESS:
+    url2label = ratings_df.set_index("tag")["label"].to_dict()
+    cp.add_label_tags(url2label)
+else:
+    print("Using existing labels from index file.")
 
 # %% [markdown]
 # # 4. Modeling
@@ -385,8 +385,8 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-# SHOULD_FIT_MODEL = True
-SHOULD_FIT_MODEL = False
+SHOULD_FIT_MODEL = True
+# SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
 
@@ -431,38 +431,37 @@ else:
 # # TODO: <s>CHECK THE SAME FOR UPSAMPLING</s> - NOT HELPING - SAME PERFORMANCE (OR SLIGHTLY WORSE)
 
 # %%
-# from sklearn.model_selection import cross_validate
+from sklearn.model_selection import cross_validate
 
-# N = cp.total_samples
-# toy_train_set = cp.generate_samples(
-#     seed=SEED,
-# )
-# print(Counter(toy_train_set.labels))
+toy_train_set = cp.generate_samples(
+    seed=SEED,
+)
+print(toy_train_set)
 
-# CV = 4
+CV = 4
 
-# tic = time.perf_counter()
-# logging.info("Starting CV...")
-# scores = cross_validate(
-#     D2VClassifier(
-#         epochs=5,
-#         vector_size=84,
-#         window=5,
-#         negative=20,
-#         seed=SEED,
-#         #     workers=psutil.cpu_count(logical=False) - 1
-#     ),
-#     toy_train_set,
-#     toy_train_set.labels,
-#     cv=CV,
-#     #     return_train_score=True,
-#     verbose=10,
-#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-# )
-# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# print("Mean test score: ", np.nanmean(scores["test_score"]))
-# scores_df = pd.DataFrame(scores)
-# display(scores_df)
+tic = time.perf_counter()
+logging.info("Starting CV...")
+scores = cross_validate(
+    D2VClassifier(
+        epochs=5,
+        vector_size=84,
+        window=5,
+        negative=20,
+        seed=SEED,
+        #     workers=psutil.cpu_count(logical=False) - 1
+    ),
+    toy_train_set,
+    toy_train_set.labels,
+    cv=CV,
+    #     return_train_score=True,
+    verbose=10,
+    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+)
+logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+print("Mean test score: ", np.nanmean(scores["test_score"]))
+scores_df = pd.DataFrame(scores)
+display(scores_df)
 
 # %% [markdown]
 # Perform search to find best set of hyperparameters
@@ -558,9 +557,6 @@ if not SHOULD_FIT_MODEL:
 else:
     print("Using recently fitted model.")
 
-# %%
-raise RuntimeError("STOP HERE!")
-
 # %% [markdown]
 # # 5 Doc2Vec Model Evaluation
 #
@@ -572,7 +568,7 @@ raise RuntimeError("STOP HERE!")
 # As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
-# classifier.sanity_check(train_set, max_rank=10, plot=True)
+classifier.sanity_check(train_set, max_rank=10, plot=True)
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D

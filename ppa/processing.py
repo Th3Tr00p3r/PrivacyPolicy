@@ -354,7 +354,7 @@ class CorpusProcessor:
         n_paths = len(fpaths)
 
         logging.info(
-            f"[CorpusProcessor.process_corpus] Processing {n_paths:,} documents and serializing to disk..."
+            f"[{self.__class__.__name__}.process_corpus] Processing {n_paths:,} documents and serializing to disk..."
         )
         # Initialize a Dictionary object
         self.dct = Dictionary()
@@ -373,11 +373,11 @@ class CorpusProcessor:
 
         # process n-grams
         if bigrams:
-            self._unite_bigrams(**kwargs)
+            self._bigram_corpus(**kwargs)
 
         # filter and remove the filtered documents from the total count
         if filter_tokens:
-            self._filter_tokens(**kwargs)
+            self._filter_corpus(**kwargs)
 
         # save
         self.dct.save(str(self.dict_fpath))
@@ -387,8 +387,10 @@ class CorpusProcessor:
 
         # tokenize
         tokenized_doc, domain_name = self._preprocess_document(doc=doc, url=url)
-        # find and unite bigrams
-        bigram_tokenized_doc = self.bigram[tokenized_doc]
+
+        # Deal with unhyphenated bigrams
+        bigram_tokenized_doc = self._bigram_tokens(tokenized_doc)
+
         # filter according to master Dictionary
         filtered_tokenized_doc = [
             token_ for token_ in bigram_tokenized_doc if self.dct.token2id.get(token_) is not None
@@ -431,7 +433,7 @@ class CorpusProcessor:
         # combine factors in decaying exponent
         return np.exp(-(median2total_ratio + removed_ratio + len_ratio))
 
-    def _unite_bigrams(
+    def _bigram_corpus(
         self,
         bigram_threshold: float = 0.1,
         min_count: int = None,
@@ -454,7 +456,9 @@ class CorpusProcessor:
             min_count = round(n_total_tokens / n_unique_tokens)
 
         # train Phrases mode on entire corpus
-        logging.info(f"[CorpusProcessor._unite_bigrams] Getting bigrams (min_count={min_count})...")
+        logging.info(
+            f"[{self.__class__.__name__}._bigram_corpus] Getting bigrams (min_count={min_count})..."
+        )
         self.bigram = Phrases(
             self.generate_samples(text_only=True),
             min_count=min_count,
@@ -470,11 +474,10 @@ class CorpusProcessor:
 
         # re-initialize the Dictionary
         self.dct = Dictionary()
-        # get unhyphenated bigrams
+        # keep the hyphenated (regular) bigrams and un-hyphenated bigrams in lists to avoid re-computation for each document
         unhyphenated_bigrams = [bigram.replace("-", "") for bigram in self.bigram.phrasegrams]
-        # keep the bigrams as a list (to avoid re-computation)
-        bigrams = list(self.bigram.phrasegrams.keys())
-        logging.info(f"[{self.__class__.__name__}._unite_bigrams] Re-processing...")
+        hyphenated_bigrams = list(self.bigram.phrasegrams.keys())
+        logging.info(f"[{self.__class__.__name__}._bigram_corpus] Re-processing...")
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(all_samples := self.generate_samples()):
@@ -482,31 +485,20 @@ class CorpusProcessor:
                 if not (fidx + 1) % (len(all_samples) / 10):
                     logging.info(f"{(fidx+1)/(len(all_samples)):.1%}... ")
 
-                # Convert the document using the `Phrases` object
-                bigram_tokens = self.bigram[td.words]
-
-                # Deal with unhyphenated bigrams # TESTESTEST
-                corrected_bigram_tokens = []
-                for token_ in bigram_tokens:
-                    try:
-                        bigram_idx = unhyphenated_bigrams.index(token_)
-                    except ValueError:
-                        # token_ is a regular word or bigram
-                        corrected_bigram_tokens.append(token_)
-                    else:
-                        # token is an unhyphenated bigram!
-                        corrected_bigram_tokens.append(bigrams[bigram_idx])
-                #                        logging.info(f"[{self.__class__.__name__}._unite_bigrams] Found un-hyphenated bigram! replacing '{token_}' with '{bigrams[bigram_idx]}' ...") # TESTESTEST
+                # Unite bigrams in document
+                bigram_tokens = self._bigram_tokens(
+                    td.words, unhyphenated_bigrams, hyphenated_bigrams
+                )
 
                 # Add to the new dictionary
                 self.dct.add_documents([bigram_tokens])
                 # Serialize the document tokens using JSON and write to file
                 corpus_file.write(bigram_tokens, notes=td.tags)
         logging.info(
-            f"[CorpusProcessor._unite_bigrams] Unique token delta: {len(self.dct) - n_unique_tokens_before}"
+            f"[{self.__class__.__name__}._bigram_corpus] Unique token delta: {len(self.dct) - n_unique_tokens_before}"
         )
 
-    def _filter_tokens(
+    def _filter_corpus(
         self,
         n_below: int = 10,
         no_above: float = 0.99,
@@ -545,11 +537,11 @@ class CorpusProcessor:
             doc_lengths, [min_percentile, max_percentile]
         ).astype(int)
         logging.info(
-            f"[CorpusProcessor._filter_tokens] Document length range: {min_tokens}-{max_tokens} tokens."
+            f"[{self.__class__.__name__}._filter_corpus] Document length range: {min_tokens}-{max_tokens} tokens."
         )
         n_below = n_below or round(self.dct.num_docs ** (1 / 3))
         logging.info(
-            f"[CorpusProcessor._filter_tokens] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
+            f"[{self.__class__.__name__}._filter_corpus] Required token appearance range: {n_below:,}-{round(no_above * self.dct.num_docs):,} documents."
         )
 
         n_unique_tokens_before = len(self.dct)
@@ -564,7 +556,9 @@ class CorpusProcessor:
         n_docs_filtered = 0
         # re-initialize the Dictionary
         self.dct = Dictionary()
-        logging.info("[CorpusProcessor._filter_tokens] Filtering tokens and document lengths...")
+        logging.info(
+            f"[{self.__class__.__name__}._filter_corpus] Filtering tokens and document lengths..."
+        )
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(all_samples := self.generate_samples()):
@@ -596,7 +590,7 @@ class CorpusProcessor:
             no_above=no_above,
         )
         self.dct = Dictionary()
-        logging.info("[CorpusProcessor._filter_tokens] Re-filtering tokens...")
+        logging.info(f"[{self.__class__.__name__}._filter_corpus] Re-filtering tokens...")
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
             for fidx, td in enumerate(all_samples := self.generate_samples()):
@@ -615,8 +609,40 @@ class CorpusProcessor:
                 corpus_file.write(filtered_tokens, notes=td.tags)
 
         logging.info(
-            f"[CorpusProcessor._filter_tokens] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
+            f"[{self.__class__.__name__}._filter_corpus] Filtered {n_docs_filtered:,} documents and {n_unique_tokens_before - len(self.dct):,}/{n_unique_tokens_before:,} ({(n_unique_tokens_before - len(self.dct))/n_unique_tokens_before:.1%}) unique tokens."
         )
+
+    def _bigram_tokens(
+        self,
+        tokenized_doc: List[str],
+        unhyphenated_bigrams: List[str] = None,
+        hyphenated_bigrams: List[str] = None,
+    ):
+        """Doc."""
+
+        # get unhyphenated bigrams
+        unhyphenated_bigrams = unhyphenated_bigrams or [
+            bigram.replace("-", "") for bigram in self.bigram.phrasegrams
+        ]
+        # keep the bigrams as a list
+        bigrams = hyphenated_bigrams or list(self.bigram.phrasegrams.keys())
+
+        # find bigrams in the document using ForzenPhrases
+        bigram_tokenized_doc = self.bigram[tokenized_doc]
+
+        # Deal with unhyphenated bigrams
+        corrected_bigram_tokenized_doc = []
+        for token_ in bigram_tokenized_doc:
+            try:
+                bigram_idx = unhyphenated_bigrams.index(token_)
+            except ValueError:
+                # token_ is a regular word or bigram
+                corrected_bigram_tokenized_doc.append(token_)
+            else:
+                # token is an unhyphenated bigram!
+                corrected_bigram_tokenized_doc.append(bigrams[bigram_idx])
+
+        return corrected_bigram_tokenized_doc
 
     def dict_info(self) -> None:
         """
@@ -634,7 +660,7 @@ class CorpusProcessor:
     @timer(1000)
     def add_label_tags(self, key2label: Dict[str, str]):
         """
-        Add label tags to the index file accordin to label dictionary.
+        Add label tags to the index file according to label dictionary.
 
         Parameters
         ----------
@@ -643,13 +669,13 @@ class CorpusProcessor:
         """
 
         logging.info(
-            "[CorpusProcessor.add_label_tags] Adding labels to index file where available...",
+            f"[{self.__class__.__name__}.add_label_tags] Adding labels to index file where available...",
         )
         with IndexedFile(self.corpus_fpath, "reindex") as corpus_idx_file:
             # iterate over all existing keys (domain names)
             for key, (pos, _) in corpus_idx_file.key2poslabel.items():
                 # "rewrite" the index line with a new label, if exists in key2label dictionary
-                corpus_idx_file.write((pos, key, key2label.get(key)))
+                corpus_idx_file.write((pos, key, key2label.get(key, "unlabeled")))
 
     @timer(1000)
     def generate_train_test_sets(  # noqa: C901

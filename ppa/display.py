@@ -1,3 +1,4 @@
+import random
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
@@ -212,7 +213,12 @@ class Plotter:
 
 
 def display_scatter(
-    arr2d: np.ndarray, labels: List[str] = None, annots: List[str] = None, title="", **kwargs
+    arr2d: np.ndarray,
+    labels: List[str] = None,
+    annots: List[str] = None,
+    annots_sample: float = 1.0,
+    title="",
+    **kwargs,
 ):
     """
     Display scatter plot for 2D or 3D data.
@@ -271,8 +277,10 @@ def display_scatter(
         ax.set_title(title)
 
         if annots is not None:
-            for idx, annot in enumerate(annots):
-                ax.annotate(annot, (arr2d[idx, 0], arr2d[idx, 1]), fontsize=8)
+            idxs = list(range(len(annots)))
+            idxs_sample = random.sample(idxs, int(len(idxs) * annots_sample))
+            for idx in idxs_sample:
+                ax.annotate(annots[idx], (arr2d[idx, 0], arr2d[idx, 1]), fontsize=8)
 
 
 def display_dim_reduction(arr2d, name: str, **kwargs):

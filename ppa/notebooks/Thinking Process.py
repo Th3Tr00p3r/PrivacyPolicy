@@ -14,8 +14,10 @@
 # ---
 
 # %% [markdown]
-# ### TODO: Create a premalink to the model (see gradio-huggingface thing - is it free?) and place it in the GitHub repo's README file
-# ### TODO: Some URLs (from the wild), such as [this one](https://help.zedge.net/hc/en-us/articles/360028821051-Privacy-Policy), give "{'error': 'Must provide either a file path or a text together with a URL (for guessing the company name).'}"
+# ### TODO: try to avoid lemmatization and stop-word removal for better human readability of tokenized documents? (no drop in score!)
+# ### TODO: Duing corpus pre-processing, after creating bigrams, look tokens which belong in the bigrams but are missing the hyphen, e.g. thirdparty -> third-party to avoid those duplicates. Ensure no drop in the model score afterwards.
+# ### TODO: Why am I seeing one-character tokens?
+# ----
 # ### TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
 # ### TODO: try including all policies (even long ones!) in the corpus? If that doesn't seriously hurt the results, it could be better for generalization.
 # ### TODO: consider/checkout implementing use of `corpus_file`
@@ -749,63 +751,51 @@ raise RuntimeError("STOP HERE!")
 # Since I recognize some of the URLs as having legitimately "good" privacy policies, I have no reason to suspect the labels, and I therefore blame my model. It could be that there's just not enough good privacy models in my data for Doc2Vec to pick up on the qualities of good privacy policies.
 
 # %% [markdown]
-# ### 5.3.2 Choosing the best threshold
-#
-# An important model parameter which isn't directly used in training, but is extremely important for model scoring, is the decision threshold - the score above which a policy is classified as "good". To choose it wisely we can use cross-validation with the training set. Since it does not affect the innards of the model (not a hyperparameter of Doc2Vec), it can be chosen post-training, depending on desired model behaviour (precision/recall)
+# # Investigating Dictionary Word Vectors
+# ## TODO: See suggestions (max norms, divide by label, similarity to docvec of each token...)
 
 # %%
-from sklearn.model_selection import ValidationCurveDisplay
+from sklearn.manifold import TSNE
+from ppa.display import display_dim_reduction
 
-for t in np.linspace(0.475, 0.525, 10):
-    logging.info(f"threshold = {t:.3f}")
-    score = classifier.score(test_set, test_set.labels, threshold=t)
-    logging.info(f"Bal. Acc. = {score:.2f}")
+word_vecs = np.asarray(classifier.model.wv.vectors)
+words = np.asarray(classifier.model.wv.index_to_key)  # fixed-width numpy strings
 
-#####################################
+tsne = TSNE(
+    n_components=2,
+    perplexity=1,
+    learning_rate=300,
+    n_iter=500,
+    n_iter_without_progress=250,
+    random_state=SEED,
+)
+tsne_result = tsne.fit_transform(word_vecs)
 
-# CV = 4
+annots = [word for word in words]
+display_dim_reduction(tsne_result, "t-SNE", annots=annots, annots_sample=0.01, figsize=(10, 8))
 
-# ValidationCurveDisplay.from_estimator(
-#    classifier,
-#     train_set,
-#     train_set.labels,
-#     fit_params={"nofit": True},
-#     param_name="threshold",
-#     param_range=np.linspace(0.475, 5.125, 10),
-#     cv=CV,
-# #     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-#     verbose=10,
-# )
+# Beep when done
+Beep(1000, 500)
 
-#####################################
+# %%
+sorted_idxs = np.argsort(np.linalg.norm(word_vecs, axis=1))[::-1]
+sorted_words = words[sorted_idxs]
+sorted_word_vecs = word_vecs[sorted_idxs]
 
+# %%
+sorted_words[-100:]
 
-# from sklearn.model_selection import cross_validate
+# %%
+help(np.argsort)
 
-# CV = 4
+# %%
+word_vecs.shape
 
-# tic = time.perf_counter()
-# logging.info("Starting CV...")
-# scores = cross_validate(
-#     D2VClassifier(
-#         epochs=5,
-#         vector_size=84,
-#         window=5,
-#         negative=20,
-#         seed=SEED,
-#         #     workers=psutil.cpu_count(logical=False) - 1
-#     ),
-#     toy_train_set,
-#     toy_train_set.labels,
-#     cv=CV,
-#     #     return_train_score=True,
-#     verbose=10,
-#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-# )
-# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# print("Mean test score: ", np.nanmean(scores["test_score"]))
-# scores_df = pd.DataFrame(scores)
-# display(scores_df)
+# %%
+word_vecs
+
+# %%
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # 6. Attaching a Classifier

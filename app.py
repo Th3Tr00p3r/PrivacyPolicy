@@ -17,6 +17,8 @@ classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
 def classify_url(url: str, member_thresh: float = 0.9, plot=True):
     try:
         doc_text = trafilatura.extract(trafilatura.fetch_url(url))
+        if doc_text is None:
+            raise RuntimeError("Unable to fetch URL. Try pasting in the policy text.")
         td, removed_ratio = processor.process_document(doc_text, url=url)
         membership_score = processor.membership_test(td.words, removed_ratio)
         membership_result = f"{membership_score:.2f} ({member_thresh:.2f})"

@@ -14,6 +14,7 @@ flagged/
 
 # Processed Data file (not needed for ready models)
 corpus.json
+working corpus/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

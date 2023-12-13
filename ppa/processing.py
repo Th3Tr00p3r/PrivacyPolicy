@@ -315,10 +315,6 @@ class CorpusProcessor:
     dict_fpath: Path = DICT_FPATH
     bigrams_fpath: Path = BIGRAMS_FPATH
 
-    @property
-    def total_samples(self):
-        return self.dct.num_docs
-
     def __post_init__(self) -> None:
         """
         Initialize the CorpusProcessor after the object creation.
@@ -338,7 +334,7 @@ class CorpusProcessor:
         Return a string representation of the CorpusProcessor object.
         """
 
-        return f"CorpusProcessor({self.total_samples:,} docs)"
+        return f"CorpusProcessor({self.dct.num_docs:,} docs)"
 
     @timer(1000)
     def process_corpus(
@@ -355,8 +351,10 @@ class CorpusProcessor:
             Toggle bigram creation, by default True.
         """
 
+        n_paths = len(fpaths)
+
         logging.info(
-            f"[CorpusProcessor.process_corpus] Processing {self.total_samples:,} documents and serializing to disk..."
+            f"[CorpusProcessor.process_corpus] Processing {n_paths:,} documents and serializing to disk..."
         )
         # Initialize a Dictionary object
         self.dct = Dictionary()
@@ -364,8 +362,8 @@ class CorpusProcessor:
             # Re-iterate, this time converting the tokens to integers according to dict ID, then saving
             for fidx, fpath in enumerate(fpaths):
                 # Track progress visually
-                if not (fidx + 1) % (self.total_samples / 10):
-                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+                if not (fidx + 1) % (n_paths / 10):
+                    logging.info(f"{(fidx+1)/n_paths:.1%}... ")
                 # Open and process each file
                 tokenized_doc, domain_name = self._preprocess_document(fpath, **kwargs)
                 # Add to the dictionary
@@ -464,6 +462,7 @@ class CorpusProcessor:
             scoring="npmi",
             delimiter="-",
         ).freeze()
+
         # save to disk
         self.bigram.save(str(self.bigrams_fpath))
 
@@ -471,16 +470,33 @@ class CorpusProcessor:
 
         # re-initialize the Dictionary
         self.dct = Dictionary()
-        logging.info("[CorpusProcessor._unite_bigrams] Re-processing...")
+        # get unhyphenated bigrams
+        unhyphenated_bigrams = [bigram.replace("-", "") for bigram in self.bigram.phrasegrams]
+        # keep the bigrams as a list (to avoid re-computation)
+        bigrams = list(self.bigram.phrasegrams.keys())
+        logging.info(f"[{self.__class__.__name__}._unite_bigrams] Re-processing...")
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-            for fidx, td in enumerate(self.generate_samples()):
+            for fidx, td in enumerate(all_samples := self.generate_samples()):
                 # Track progress visually
-                if not (fidx + 1) % (self.total_samples / 10):
-                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+                if not (fidx + 1) % (len(all_samples) / 10):
+                    logging.info(f"{(fidx+1)/(len(all_samples)):.1%}... ")
 
                 # Convert the document using the `Phrases` object
                 bigram_tokens = self.bigram[td.words]
+
+                # Deal with unhyphenated bigrams # TESTESTEST
+                corrected_bigram_tokens = []
+                for token_ in bigram_tokens:
+                    try:
+                        bigram_idx = unhyphenated_bigrams.index(token_)
+                    except ValueError:
+                        # token_ is a regular word or bigram
+                        corrected_bigram_tokens.append(token_)
+                    else:
+                        # token is an unhyphenated bigram!
+                        corrected_bigram_tokens.append(bigrams[bigram_idx])
+                #                        logging.info(f"[{self.__class__.__name__}._unite_bigrams] Found un-hyphenated bigram! replacing '{token_}' with '{bigrams[bigram_idx]}' ...") # TESTESTEST
 
                 # Add to the new dictionary
                 self.dct.add_documents([bigram_tokens])
@@ -551,10 +567,10 @@ class CorpusProcessor:
         logging.info("[CorpusProcessor._filter_tokens] Filtering tokens and document lengths...")
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-            for fidx, td in enumerate(self.generate_samples()):
+            for fidx, td in enumerate(all_samples := self.generate_samples()):
                 # Track progress visually
-                if not (fidx + 1) % (self.total_samples / 10):
-                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+                if not (fidx + 1) % (len(all_samples) / 10):
+                    logging.info(f"{(fidx+1)/(len(all_samples)):.1%}... ")
 
                 # remove tokens not in filtered Dictionary
                 filtered_tokens = [
@@ -583,10 +599,10 @@ class CorpusProcessor:
         logging.info("[CorpusProcessor._filter_tokens] Re-filtering tokens...")
         with IndexedFile(self.corpus_fpath, "write") as corpus_file:
             # Re-iterate over all saved samples, adding labels as a second tag where available, then saving
-            for fidx, td in enumerate(self.generate_samples()):
+            for fidx, td in enumerate(all_samples := self.generate_samples()):
                 # Track progress visually
-                if not (fidx + 1) % (self.total_samples / 10):
-                    logging.info(f"{(fidx+1)/(self.total_samples):.1%}... ")
+                if not (fidx + 1) % (len(all_samples) / 10):
+                    logging.info(f"{(fidx+1)/(len(all_samples)):.1%}... ")
 
                 # remove tokens not in filtered Dictionary
                 filtered_tokens = [
@@ -676,7 +692,7 @@ class CorpusProcessor:
 
         file_idx_path = get_file_index_path(fpath)
 
-        n_samples = n_samples or self.total_samples
+        n_samples = n_samples or self.dct.num_docs
 
         # Sort the index into a dictionary
         index_dict: Dict[str, List[int]] = {"good": [], "bad": [], "unlabeled": []}
@@ -697,8 +713,8 @@ class CorpusProcessor:
         label_counts_dict = {label: len(list_) for label, list_ in index_dict.items()}
 
         # trim each list according to the requested number of samples and its own length
-        if n_samples < self.total_samples:
-            sample_frac = n_samples / self.total_samples
+        if n_samples < self.dct.num_docs:
+            sample_frac = n_samples / self.dct.num_docs
             for label in index_dict.keys():
                 if not (upsampling and label == "good"):
                     n_reduced = round(label_counts_dict[label] * sample_frac)
@@ -731,7 +747,7 @@ class CorpusProcessor:
             rng.shuffle(index_dict["good"])
 
             # trim good list AFTER upsampling (if relevant)
-            if n_samples < self.total_samples:
+            if n_samples < self.dct.num_docs:
                 n_reduced = int(len(index_dict["good"]) * sample_frac)
                 index_dict["good"] = index_dict["good"][:n_reduced]
 

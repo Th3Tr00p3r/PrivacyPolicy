@@ -101,8 +101,8 @@ REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
 import random
 
 # limit number of policies in corpus
-N_PATHS = 100_000_000
-# N_PATHS = 10_000
+# N_PATHS = 100_000_000
+N_PATHS = 1_000
 
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
@@ -125,8 +125,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
@@ -150,6 +150,9 @@ else:
     print("Loaded existing CorpusProcessor")
 
 Beep(1000, 500)
+
+# %%
+raise RuntimeError("STOP HERE")
 
 # %% [markdown]
 # # 2. Preliminary EDA
@@ -777,10 +780,27 @@ display_dim_reduction(tsne_result, "t-SNE", annots=annots, annots_sample=0.01, f
 # Beep when done
 Beep(1000, 500)
 
+# %% [markdown]
+# testing stuff with .wv
+
 # %%
 sorted_idxs = np.argsort(np.linalg.norm(word_vecs, axis=1))[::-1]
 sorted_words = words[sorted_idxs]
 sorted_word_vecs = word_vecs[sorted_idxs]
+
+# %%
+from copy import deepcopy
+
+test_dct = deepcopy(cp.dct)
+
+# %%
+test_dct.compactify()
+
+# %%
+test_dct.cfs
+
+# %%
+sorted_words[:100]
 
 # %%
 sorted_words[-100:]

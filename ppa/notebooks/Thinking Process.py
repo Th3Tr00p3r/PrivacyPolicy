@@ -14,13 +14,9 @@
 # ---
 
 # %% [markdown]
-# ### TODO: try to avoid lemmatization and stop-word removal for better human readability of tokenized documents? (no drop in score!)
-# ### TODO: Duing corpus pre-processing, after creating bigrams, look tokens which belong in the bigrams but are missing the hyphen, e.g. thirdparty -> third-party to avoid those duplicates. Ensure no drop in the model score afterwards.
-# ### TODO: Why am I seeing one-character tokens?
-# ----
+# ### TODO: after cross-validation, train on the entire dataset and use that model----
 # ### TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
-# ### TODO: try including all policies (even long ones!) in the corpus? If that doesn't seriously hurt the results, it could be better for generalization.
-# ### TODO: consider/checkout implementing use of `corpus_file`
+# ### TODO: consider/checkout implementing use of `corpus_file` - need to try creating a train-set file and passing it to .train() method of Doc2Vec, see if it's much faster than passing the SampleGenerator iterator? Possibly, such a file could be created via a new method for SampleGenerator?
 # ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
 # ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 
@@ -102,7 +98,7 @@ import random
 
 # limit number of policies in corpus
 N_PATHS = 100_000_000
-# N_PATHS = 1_000
+# N_PATHS = 10_000
 
 # get all privacy policy markdown file paths in a (random) list
 print("Loading all privacy policy paths to memory... ", end="")
@@ -125,8 +121,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
@@ -136,14 +132,14 @@ if SHOULD_REPROCESS:
     cp = CorpusProcessor()
     cp.process_corpus(
         policy_paths,
-        lemmatize=True,
-        should_filter_stopwords=True,
+        lemmatize=False,
+        should_filter_stopwords=False,
         bigrams=True,
-        bigram_threshold=0.5,
+        bigram_threshold=0.75,
         n_below=None,
         no_above=1.0,
-        min_percentile=1,
-        max_percentile=99,
+        min_percentile=0.5,
+        max_percentile=99.5,
     )
 else:
     cp = CorpusProcessor()
@@ -209,10 +205,10 @@ with Plotter(
 from ppa.display import display_wordcloud
 
 print("Total Frequency Word-Cloud:")
-display_wordcloud(cp.dct)
+_ = display_wordcloud(cp.dct)
 
 print("Document Frequency Word-Cloud:")
-display_wordcloud(cp.dct, per_doc=True)
+_ = display_wordcloud(cp.dct, per_doc=True)
 
 # %% [markdown]
 # Notice how the images are quite similar - this is expected since the whole corpus is comprised of the same type of documents (privacy policies).
@@ -229,9 +225,9 @@ print(f"After filtering extremens, Dictionary contains {len(filtered_dct):,} uni
 
 # display the word frequencies as a word-cloud
 print("Total Frequency Word-Cloud:")
-display_wordcloud(filtered_dct)
+_ = display_wordcloud(filtered_dct)
 print("Document Frequency Word-Cloud:")
-display_wordcloud(filtered_dct, per_doc=True)
+_ = display_wordcloud(filtered_dct, per_doc=True)
 
 # %% [markdown]
 # What immediately stands out is the difference between the "total frequency" and "per-document frequency" before and after filtering the most common words. In the "total frequency" picture, we are just seeing less common words (the most common ones being ignored). In the "per-document frequency" picture, this enables us to see past the noise.
@@ -385,8 +381,8 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-SHOULD_FIT_MODEL = True
-# SHOULD_FIT_MODEL = False
+# SHOULD_FIT_MODEL = True
+SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
 
@@ -449,12 +445,13 @@ scores = cross_validate(
         window=5,
         negative=20,
         seed=SEED,
+        #         train_score=True,
         #     workers=psutil.cpu_count(logical=False) - 1
     ),
     toy_train_set,
     toy_train_set.labels,
     cv=CV,
-    #     return_train_score=True,
+    return_train_score=True,
     verbose=10,
     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
 )
@@ -462,6 +459,41 @@ logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
 print("Mean test score: ", np.nanmean(scores["test_score"]))
 scores_df = pd.DataFrame(scores)
 display(scores_df)
+
+# %% [markdown]
+# Train on the entire corpus
+
+# %%
+from ppa.estimators import D2VClassifier
+from ppa.utils import timer
+from datetime import datetime
+import time
+
+SHOULD_FIT_MODEL = True
+# SHOULD_FIT_MODEL = False
+
+if SHOULD_FIT_MODEL:
+    # initialize classifier
+    classifier = D2VClassifier(
+        epochs=5,
+        vector_size=84,  # 84?
+        window=5,
+        negative=20,
+        train_score=True,
+        seed=SEED,
+        #     iterative_training=True,
+        workers=psutil.cpu_count(logical=False) - 1,
+    )
+
+    # fit the model
+    classifier.fit(toy_train_set, toy_train_set.labels)
+
+    # save
+    dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
+    classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model"))
+
+else:
+    print("Not fitting.")
 
 # %% [markdown]
 # Perform search to find best set of hyperparameters
@@ -762,7 +794,7 @@ words = np.asarray(classifier.model.wv.index_to_key)  # fixed-width numpy string
 
 tsne = TSNE(
     n_components=2,
-    perplexity=1,
+    perplexity=0.95,
     learning_rate=300,
     n_iter=500,
     n_iter_without_progress=250,
@@ -770,11 +802,11 @@ tsne = TSNE(
 )
 tsne_result = tsne.fit_transform(word_vecs)
 
-annots = [word for word in words]
-display_dim_reduction(tsne_result, "t-SNE", annots=annots, annots_sample=0.01, figsize=(10, 8))
-
 # Beep when done
-Beep(1000, 500)
+Beep(1000, 1000)
+
+# %%
+display_dim_reduction(tsne_result, "t-SNE", annots=words, annots_sample=0.01, figsize=(10, 8))
 
 # %% [markdown]
 # testing stuff with .wv
@@ -785,30 +817,10 @@ sorted_words = words[sorted_idxs]
 sorted_word_vecs = word_vecs[sorted_idxs]
 
 # %%
-from copy import deepcopy
-
-test_dct = deepcopy(cp.dct)
-
-# %%
-test_dct.compactify()
-
-# %%
-test_dct.cfs
-
-# %%
 sorted_words[:100]
 
 # %%
 sorted_words[-100:]
-
-# %%
-help(np.argsort)
-
-# %%
-word_vecs.shape
-
-# %%
-word_vecs
 
 # %%
 raise RuntimeError("STOP HERE!")

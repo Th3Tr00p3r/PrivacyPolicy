@@ -65,7 +65,7 @@ class SampleGenerator:
         List of starting positions in the file for sampling.
     rng : np.random.Generator, optional
         Random number generator, by default np.random.default_rng().
-    text_only : bool, optional
+    tokens_only : bool, optional
         Flag to indicate sampling text only, by default False.
     """
 
@@ -73,7 +73,7 @@ class SampleGenerator:
     start_pos_list: List[int] = None
     labeled: bool = False
     rng: np.random.Generator = field(default_factory=lambda: np.random.default_rng())
-    text_only: bool = False
+    tokens_only: bool = False
     positive_keys: List[str] = None
     negative_keys: List[str] = None
 
@@ -189,7 +189,7 @@ class SampleGenerator:
             start_pos_list,
             self.labeled,
             self.rng,
-            self.text_only,
+            self.tokens_only,
         )
 
     def get_labeled(self) -> Tuple["SampleGenerator", np.ndarray]:
@@ -211,7 +211,7 @@ class SampleGenerator:
         """
 
         for tokens, key, label in self.indexed_file.read_all():
-            if not self.text_only:
+            if not self.tokens_only:
                 yield TaggedDocument(
                     tokens, ([key, label] if (label != "unlabeled") and self.labeled else [key])
                 )
@@ -425,11 +425,6 @@ class CorpusProcessor:
         )
         median2total_ratio = median_common_id / len(self.dct)
 
-        #        # TESTESTEST
-        #        print(f"removed_ratio: {removed_ratio}")
-        #        print(f"median_common_id: {median_common_id}")
-        #        # /TESTESTEST
-
         # combine factors in decaying exponent
         return np.exp(-(median2total_ratio + removed_ratio + len_ratio))
 
@@ -460,7 +455,7 @@ class CorpusProcessor:
             f"[{self.__class__.__name__}._bigram_corpus] Getting bigrams (min_count={min_count})..."
         )
         self.bigram = Phrases(
-            self.generate_samples(text_only=True),
+            self.generate_samples(tokens_only=True),
             min_count=min_count,
             threshold=bigram_threshold,
             scoring="npmi",
@@ -702,7 +697,7 @@ class CorpusProcessor:
             Integer seed for deterministic train/test splitting.
         n_samples : int, optional
             Number of samples, by default None.
-        text_only : bool, optional
+        tokens_only : bool, optional
             Toggle text-only samples, by default False.
 
         Returns

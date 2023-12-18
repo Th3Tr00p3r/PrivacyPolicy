@@ -385,7 +385,7 @@ class D2VClassifier(D2VTransformer):
         epochs: int = 10,
         train_score: bool = False,
         seed: int = None,
-        threshold: float = 0.5,
+        threshold: float = 0.505,
         workers: int = 1,
     ):
         """
@@ -505,8 +505,8 @@ class D2VClassifier(D2VTransformer):
             X_vec = self.transform(X, **kwargs)
 
         # get the mean vectors from the model using the collected keys
-        mean_good = np.array([self.model.dv[k] for k in self.label2keys["good"]]).mean(axis=0)
-        mean_bad = np.array([self.model.dv[k] for k in self.label2keys["bad"]]).mean(axis=0)
+        mean_good = self.mean_labeled_model_vector("good")
+        mean_bad = self.mean_labeled_model_vector("bad")
 
         # Use similaities between mean good/bad train vectors and samples to compute scores
         good_sims = self.model.dv.cosine_similarities(mean_good, X_vec)
@@ -606,6 +606,11 @@ class D2VClassifier(D2VTransformer):
             # /TESTESTEST
 
         return bal_acc
+
+    def mean_labeled_model_vector(self, label: str):
+        """Doc."""
+
+        return np.array([self.model.dv[k] for k in self.label2keys[label]]).mean(axis=0)
 
     def valid_labels(self, y) -> Tuple[np.ndarray, np.ndarray]:
         """

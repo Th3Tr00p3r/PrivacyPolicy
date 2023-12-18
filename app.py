@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import Tuple
 
 import gradio as gr
 import trafilatura
 from gensim.corpora import Dictionary
+from matplotlib.figure import Figure
 
 from ppa.display import display_wordcloud
 from ppa.estimators import D2VClassifier
@@ -14,18 +16,22 @@ processor = CorpusProcessor()
 classifier = D2VClassifier.load_model(MODEL_DIR_PATH / "pp_d2v.model")
 
 
-def classify_url(url: str, member_thresh: float = 0.9, plot=True):
+def classify_url(
+    url: str, member_thresh: float = 0.9, plot: bool = True, verbose=False
+) -> Tuple[str, str, str, str, Figure]:
+    """Doc."""
+
     try:
         doc_text = trafilatura.extract(trafilatura.fetch_url(url))
         if doc_text is None:
             raise RuntimeError("Unable to fetch URL. Try pasting in the policy text.")
-        td, removed_ratio = processor.process_document(doc_text, url=url)
-        membership_score = processor.membership_test(td.words, removed_ratio)
-        membership_result = f"{membership_score:.2f} ({member_thresh:.2f})"
+        td = processor.process_document(doc_text, url=url)
+        membership_score = processor.membership_test(td.words, verbose=verbose)
+        membership_result = f"{membership_score:.3f} ({member_thresh:.3f})"
         if membership_score > member_thresh:
             label, scores = classifier.predict([td], get_scores=True)
             class_result = "Good" if label == -1 else "Bad"
-            score_result = f"{scores[0]:.2f} ({classifier.threshold:.2f})"
+            score_result = f"{scores[0]:.3f} ({classifier.threshold:.3f})"
             wordcloud_fig = (
                 display_wordcloud(Dictionary([td.words]), should_plot=False) if plot else None
             )

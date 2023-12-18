@@ -267,6 +267,7 @@ def display_scatter(
                 ax.scatter(
                     *[dim_slice[label_indices] for dim_slice in dim_slices],
                     6,
+                    marker=".",
                     label=label,
                 )
             ax.legend()

@@ -160,7 +160,9 @@ class SampleGenerator:
         counter_str = ", ".join([f"{k}: {v:,}" for k, v in Counter(self.labels).items()])
         return f"SampleGenerator({len(self):,} `TaggedDocument` objects ({counter_str}), corpus_fpath={self.corpus_fpath})"
 
-    def sample(self, n: int = None, idxs: List[int] | np.ndarray = None) -> "SampleGenerator":
+    def sample(
+        self, n: int = None, idxs: List[int] | np.ndarray = None, tokens_only=None
+    ) -> "SampleGenerator":
         """
         Generate a new SampleGenerator instance with sampled data.
 
@@ -189,16 +191,23 @@ class SampleGenerator:
             start_pos_list,
             self.labeled,
             self.rng,
-            self.tokens_only,
+            tokens_only or self.tokens_only,
         )
 
-    def get_labeled(self) -> Tuple["SampleGenerator", np.ndarray]:
+    def get_labeled(self, label=None, tokens_only=None) -> "SampleGenerator":
         """Doc."""
 
-        labeled_idxs = [
-            self.index(key) for key, label in zip(self.keys, self.labels) if label != "unlabeled"
-        ]
-        return self.sample(idxs=labeled_idxs), labeled_idxs
+        if not label:
+            labeled_idxs = [
+                self.index(key)
+                for key, label_ in zip(self.keys, self.labels)
+                if label_ != "unlabeled"
+            ]
+        else:
+            labeled_idxs = [
+                self.index(key) for key, label_ in zip(self.keys, self.labels) if label_ == label
+            ]
+        return self.sample(idxs=labeled_idxs, tokens_only=tokens_only)
 
     def __iter__(self) -> TaggedDocument:
         """
@@ -382,7 +391,7 @@ class CorpusProcessor:
         # save
         self.dct.save(str(self.dict_fpath))
 
-    def process_document(self, doc: str, url: str):
+    def process_document(self, doc: str, url: str) -> TaggedDocument:
         """Process a single document based on Dictionary and FrozenPhrases objects learned form entire corpus."""
 
         # tokenize
@@ -396,19 +405,12 @@ class CorpusProcessor:
             token_ for token_ in bigram_tokenized_doc if self.dct.token2id.get(token_) is not None
         ]
 
-        #        print(f"N TOKENS: {len(bigram_tokenized_doc)}") # TESTESTEST
-
-        # calculate ratio of removed/kept tokens (helps with identifying out-of-group documents)
-        removed_ratio = (len(bigram_tokenized_doc) - len(filtered_tokenized_doc)) / len(
-            bigram_tokenized_doc
-        )
-
         # remove consecutive duplicates after filtering
         final_tokenized_doc = self._remove_consecutive_duplicates(filtered_tokenized_doc)
 
-        return TaggedDocument(final_tokenized_doc, [domain_name]), removed_ratio
+        return TaggedDocument(final_tokenized_doc, [domain_name])
 
-    def membership_test(self, tokenized_doc: List[str], removed_ratio: float) -> float:
+    def membership_test(self, tokenized_doc: List[str], verbose=False) -> float:
         """
         Estimate if a tokenized document belongs to the type/group represented by the corpus.
         The idea is that since the corpus Dictionary's IDs are ordered according to prevalence, outlier documents
@@ -416,17 +418,25 @@ class CorpusProcessor:
         """
 
         # Length ratio (penalizing short final lengths)
-        len_ratio = 4 / len(tokenized_doc)
+        len_ratio = 1 / (1 + len(tokenized_doc) / 4)
 
         # In-dictionary factor (penalzing documents with token requencies differing from those in the Dictionary)
         token_id_counts = Counter([idx for idx in self.dct.doc2idx(tokenized_doc)])
         median_common_id = np.median(
-            sorted(token_id_counts, key=lambda k: token_id_counts[k], reverse=True)[:10]
+            sorted(token_id_counts, key=lambda k: token_id_counts[k], reverse=True)[:15]
         )
-        median2total_ratio = median_common_id / len(self.dct)
+        median2total_ratio = median_common_id / (len(self.dct) / 3)
+
+        if verbose:
+            print(
+                f"\nCorpusProcessor.membership_test ratios:\nlen_ratio={len_ratio:.3f}\nmedian2total_ratio={median2total_ratio:.3f}"
+            )
+            print(
+                f"\nCorpusProcessor.membership_test factors:\nlen_ratio={np.exp(-len_ratio):.3f}\nmedian2total_ratio={np.exp(-median2total_ratio):.3f}\n"
+            )
 
         # combine factors in decaying exponent
-        return np.exp(-(median2total_ratio + removed_ratio + len_ratio))
+        return np.exp(-(median2total_ratio + len_ratio))
 
     def _bigram_corpus(
         self,

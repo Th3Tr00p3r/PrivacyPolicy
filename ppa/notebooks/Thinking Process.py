@@ -14,11 +14,14 @@
 # ---
 
 # %% [markdown]
-# ### TODO: after cross-validation, train on the entire dataset and use that model----
-# ### TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
-# ### TODO: consider/checkout implementing use of `corpus_file` - need to try creating a train-set file and passing it to .train() method of Doc2Vec, see if it's much faster than passing the SampleGenerator iterator? Possibly, such a file could be created via a new method for SampleGenerator?
-# ### TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
-# ### TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
+# ## TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
+# * Idea - decide on scores for the ToS;DR labels, i.e. A=1.0, B=0.75, C=0.50, D=0.25, E=0.0 and when calculating the score for an inferred policy do it in the following way:
+#     1) Average all labeled training policies of each label.
+#     2) Calculate its similarity score to each of the mean label vectors, rescaled to \[0, 1\].
+#     3) Normalize the similarities to one, and use a threshold to ignore (rescaled, normalized) similarities below, e.g. 0.5
+#     4) For the surviving similarity scores, multiply each by the label score (A/B/C/D/E, as above) and sum the products - that is the policy score!
+# ## TODO: Try [UMAP](https://github.com/lmcinnes/umap) visualization, for speed if anything else
+# ## TODO: Topic Modeling - Consider using topic modeling techniques (e.g., Latent Dirichlet Allocation - LDA) to identify underlying topics within the documents. Visualize the topics and their prevalence in the dataset.
 
 # %%
 # import project
@@ -121,8 +124,8 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-SHOULD_REPROCESS = True
-# SHOULD_REPROCESS = False
+# SHOULD_REPROCESS = True
+SHOULD_REPROCESS = False
 
 CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
@@ -231,25 +234,6 @@ _ = display_wordcloud(filtered_dct, per_doc=True)
 
 # %% [markdown]
 # What immediately stands out is the difference between the "total frequency" and "per-document frequency" before and after filtering the most common words. In the "total frequency" picture, we are just seeing less common words (the most common ones being ignored). In the "per-document frequency" picture, this enables us to see past the noise.
-#
-# Look for the frequency of specific words (such as "url"):
-
-# %%
-# import re
-
-# # The pattern you want to search for using regular expression
-# # target_pattern = r'\b[a-zA-Z]<|>\b[a-zA-Z]\b'
-# target_pattern = "><"  # twisternederland.com
-
-# # Compile the regular expression pattern
-# pattern = re.compile(target_pattern)
-
-# # Iterate through each document and check if the pattern matches the document
-# for tagged_doc in cp.generate_samples():
-#     text = " ".join(tagged_doc.words)
-#     if pattern.search(text):
-#         print(text)
-#         break
 
 # %% [markdown]
 # # 3. Aqcuiring and incorporating labels
@@ -421,79 +405,74 @@ else:
 # %% [markdown]
 # Cross validate
 
-# %% [markdown]
-# # TODO: <s>see if the attempt at using model vectors does about 0.75 in balanced accuracy (same as using inferred training vectors)?</s> YES! WITH EPOCHS=5 got ~0.76
-#
-# # TODO: <s>CHECK THE SAME FOR UPSAMPLING</s> - NOT HELPING - SAME PERFORMANCE (OR SLIGHTLY WORSE)
-
 # %%
-from sklearn.model_selection import cross_validate
+# from sklearn.model_selection import cross_validate
 
-toy_train_set = cp.generate_samples(
-    seed=SEED,
-)
-print(toy_train_set)
+# toy_train_set = cp.generate_samples(
+#     seed=SEED,
+# )
+# print(toy_train_set)
 
-CV = 4
+# CV = 4
 
-tic = time.perf_counter()
-logging.info("Starting CV...")
-scores = cross_validate(
-    D2VClassifier(
-        epochs=5,
-        vector_size=84,
-        window=5,
-        negative=20,
-        seed=SEED,
-        #         train_score=True,
-        #     workers=psutil.cpu_count(logical=False) - 1
-    ),
-    toy_train_set,
-    toy_train_set.labels,
-    cv=CV,
-    return_train_score=True,
-    verbose=10,
-    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-)
-logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-print("Mean test score: ", np.nanmean(scores["test_score"]))
-scores_df = pd.DataFrame(scores)
-display(scores_df)
+# tic = time.perf_counter()
+# logging.info("Starting CV...")
+# scores = cross_validate(
+#     D2VClassifier(
+#         epochs=10,
+#         vector_size=84,
+#         window=5,
+#         negative=20,
+#         seed=SEED,
+#         #         train_score=True,
+#         #     workers=psutil.cpu_count(logical=False) - 1
+#     ),
+#     toy_train_set,
+#     toy_train_set.labels,
+#     cv=CV,
+#     return_train_score=True,
+#     verbose=10,
+#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+# )
+# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+# print("Mean test score: ", np.nanmean(scores["test_score"]))
+# scores_df = pd.DataFrame(scores)
+# display(scores_df)
 
 # %% [markdown]
 # Train on the entire corpus
 
 # %%
-from ppa.estimators import D2VClassifier
-from ppa.utils import timer
-from datetime import datetime
-import time
+# from ppa.estimators import D2VClassifier
+# from ppa.utils import timer
+# from datetime import datetime
+# import time
 
-SHOULD_FIT_MODEL = True
+# # SHOULD_FIT_MODEL = True
 # SHOULD_FIT_MODEL = False
 
-if SHOULD_FIT_MODEL:
-    # initialize classifier
-    classifier = D2VClassifier(
-        epochs=5,
-        vector_size=84,  # 84?
-        window=5,
-        negative=20,
-        train_score=True,
-        seed=SEED,
-        #     iterative_training=True,
-        workers=psutil.cpu_count(logical=False) - 1,
-    )
+# if SHOULD_FIT_MODEL:
+#     # initialize classifier
+#     classifier = D2VClassifier(
+#         epochs=5,
+#         vector_size=84,  # 84?
+#         window=5,
+#         negative=20,
+#         train_score=True,
+#         seed=SEED,
+#         #     iterative_training=True,
+#         workers=psutil.cpu_count(logical=False) - 1,
+#     )
 
-    # fit the model
-    classifier.fit(toy_train_set, toy_train_set.labels)
+#     # fit the model
+#     classifier.fit(toy_train_set, toy_train_set.labels)
 
-    # save
-    dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
-    classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model"))
+#     # save
+#     dt_str = datetime.now().strftime("%d%m%Y_%H%M%S")
+#     classifier.save_model(Path(f"D:/MEGA/Programming/ML/PPA/ppa/models/pp_d2v_{dt_str}.model"))
 
-else:
-    print("Not fitting.")
+# else:
+#     print("Not fitting.")
 
 # %% [markdown]
 # Perform search to find best set of hyperparameters
@@ -600,64 +579,62 @@ else:
 # As a first test of the model, a reasonable sanity check (adapted from that suggested by [Radim Řehůřek](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py) himself) would be to see if most vectors inferred for the policies the model was trained upon are most similar to the corresponding document vectors of the model itself.
 
 # %%
-classifier.sanity_check(train_set, max_rank=10, plot=True)
+# classifier.sanity_check(train_set, max_rank=10, plot=True)
 
 # %% [markdown]
 # ## 5.2 Visualizing the results using dimensionallity reduction to 2D
-# We begin by inferring vectors for all labeled samples in the test set
+# We begin by getting vectors for all labeled samples in the train set
 
 # %%
-# # Infer document vectors for the test data
-# # convet labeles to an array and keep only "good"/"bad" elements, and their indices
-# labeled_test_tags, labeled_test_idxs = classifier.valid_labels(test_set.labels)
-# test_set_labeled = test_set.sample(idxs=np.nonzero(labeled_test_idxs)[0])
-# test_vectors_labeled = classifier.transform(test_set_labeled, normalized=True)
-
-# # Beep when done
-# Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
+train_urls, labeled_train_vecs_tuple, train_labels = zip(
+    *[
+        (k, classifier.model.dv[k], train_set.indexed_file.key2poslabel[k][1])
+        for k in classifier.label2keys["good"] + classifier.label2keys["bad"]
+    ]
+)
+labeled_train_vecs = np.array(
+    labeled_train_vecs_tuple
+)  # unzipping returns a tuple, need to convert to 2D array
 
 # %% [markdown]
 # ### 5.2.1 PCA
 
 # %%
-# from sklearn.decomposition import PCA
-# from ppa.display import display_dim_reduction
+from sklearn.decomposition import PCA
+from ppa.display import display_dim_reduction
 
-# test_labels = ["good" if val == -1 else "bad" for val in labeled_test_tags]
+# Perform PCA to reduce dimensionality for visualization
+pca = PCA(n_components=2)  # You can adjust the number of components as needed
+pca_result = pca.fit_transform(labeled_train_vecs)
 
-# # Perform PCA to reduce dimensionality for visualization
-# pca = PCA(n_components=2)  # You can adjust the number of components as needed
-# pca_result = pca.fit_transform(test_vectors_labeled)
-
-# # annots = [
-# #     tagged_doc.tags[0]
-# #     for tagged_doc in test_set
-# #     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-# # ]
-# display_dim_reduction(pca_result, "PCA", labels=test_labels, figsize=(10, 8))
+display_dim_reduction(
+    pca_result, "PCA", labels=train_labels, annots=train_urls, annots_sample=0.01, figsize=(10, 8)
+)
 
 # %% [markdown]
 # ### 5.2.2 t-SNE
 
 # %%
-# from sklearn.manifold import TSNE
+from sklearn.manifold import TSNE
 
-# tsne = TSNE(
-#     n_components=2,
-#     perplexity=1,
-#     learning_rate=200,
-#     n_iter=1000,
-#     n_iter_without_progress=500,
-#     random_state=SEED,
-# )
-# tsne_result = tsne.fit_transform(test_vectors_labeled)
+tsne = TSNE(
+    n_components=2,
+    perplexity=1,
+    learning_rate=200,
+    n_iter=1000,
+    n_iter_without_progress=200,
+    random_state=SEED,
+)
+tsne_result = tsne.fit_transform(labeled_train_vecs)
 
-# # annots = [
-# #     tagged_doc.tags[0]
-# #     for tagged_doc in test_set
-# #     if len(tagged_doc.tags) > 1 and tagged_doc.tags[1] == "good"
-# # ]
-# display_dim_reduction(tsne_result, "t-SNE", labels=test_labels, figsize=(10, 8))
+display_dim_reduction(
+    tsne_result,
+    "t-SNE",
+    labels=train_labels,
+    annots=train_urls,
+    annots_sample=0.01,
+    figsize=(10, 8),
+)
 
 # %% [markdown]
 # I cannot see any clear pattern separating "good" policies from "bad" ones. This doesn't mean the model isn't sensitive to the labels, only that the 2D visualizations don't seem to capture it.
@@ -809,18 +786,265 @@ Beep(1000, 1000)
 display_dim_reduction(tsne_result, "t-SNE", annots=words, annots_sample=0.01, figsize=(10, 8))
 
 # %% [markdown]
-# testing stuff with .wv
+# ## Testing stuff with .wv and the Dictionary
+
+# %% [markdown]
+# getting the all vocabulary words and their vectors sorted by norm (using .wv)
 
 # %%
-sorted_idxs = np.argsort(np.linalg.norm(word_vecs, axis=1))[::-1]
-sorted_words = words[sorted_idxs]
-sorted_word_vecs = word_vecs[sorted_idxs]
+norm_sorted_idxs = np.argsort(np.linalg.norm(word_vecs, axis=1))
+norm_sorted_word_vecs = word_vecs[norm_sorted_idxs]
+norm_sorted_words = words[norm_sorted_idxs]
+
+# %% [markdown]
+# getting the all vocabulary words sorted by prevalence (using the Dictionary)
 
 # %%
-sorted_words[:100]
+word_count_dict = {cp.dct[id]: count for id, count in getattr(cp.dct, "cfs").items()}
+prevalence_sorted_dict_words, _ = zip(*sorted(word_count_dict.items(), key=lambda item: item[1]))
+prevalence_sorted_dict_words = np.array(prevalence_sorted_dict_words)
+
+# %% [markdown]
+# To find correlation between the two, lets turn the words to their IDs (so we can work with numbers), and correlate:
 
 # %%
-sorted_words[-100:]
+# Convert to IDs using the Dictionary
+norm_sorted_ids = np.array([cp.dct.token2id[word] for word in norm_sorted_words], dtype=float)
+prevalence_sorted_dict_ids = np.array(
+    [cp.dct.token2id[word] for word in prevalence_sorted_dict_words], dtype=float
+)
+
+# Calculate the correlation coefficient between the values in the lists
+correlation = np.corrcoef(norm_sorted_ids, prevalence_sorted_dict_ids)[0, 1]
+
+print(f"The correlation between the values in the lists is: {correlation:.2f}")
+
+# %% [markdown]
+# Some correlation exists, but it's definitely no a direct connection.
+
+# %% [markdown]
+# Let's play around with WMD (word-mover's distant)
+
+# %%
+good_docs, _ = train_set.get_labeled("good", tokens_only=True)
+bad_docs, _ = train_set.get_labeled("bad", tokens_only=True)
+
+# %%
+classifier.model.wv.wmdistance(good_docs[0].words, good_docs[5].words)
+
+# %% [markdown]
+# ## Word-vec / Doc-vec interaction
+
+# %% [markdown]
+# let's experiment on some labeled policy
+
+# %%
+labeled_train_set = train_set.get_labeled()
+
+# %%
+doc = labeled_train_set[1]
+words = np.array(doc.words)
+
+# %% [markdown]
+# taking a look:
+
+# %%
+print("Domain name: ", doc.tags[0])
+" ".join(words)
+
+# %% [markdown]
+# let's see if I can perform augmentation using similar words
+
+# %%
+# aug_protonmail_pp = []
+# for word in words:
+#     print(word)
+#     aug_protonmail_pp
+#     print(classifier.model.wv.most_similar(word, topn=3))
+
+# %% [markdown]
+# get the document vector
+
+# %%
+doc_dv = classifier.model.dv[doc.tags[0]]
+
+# %% [markdown]
+# get the document tokens as word-vectors
+
+# %%
+doc_wv = np.array([classifier.model.wv[word] for word in words])
+doc_wv.shape
+
+# %% [markdown]
+# checking the similarity between the document vector and the sum/mean of all its word-vectors
+
+# %%
+classifier.model.dv.cosine_similarities(doc_dv, [doc_wv.mean(axis=0)])[0]
+
+# %% [markdown]
+# checking the similarity between each word vector and the doc vector
+
+# %%
+doc_word_sims = classifier.model.dv.cosine_similarities(doc_dv, doc_wv)
+
+# %% [markdown]
+# let's try sorting the words according to the similarity
+
+# %%
+doc_word_sims_sorted_idxs = np.argsort(doc_word_sims)[::-1]
+sim_sorted_words_duplicates = words[doc_word_sims_sorted_idxs]
+
+# TEST
+print(sim_sorted_words_duplicates[:10])
+
+# %% [markdown]
+# remove the duplicates while keeping the order
+
+# %%
+sim_sorted_words, indices = np.unique(sim_sorted_words_duplicates, return_index=True)
+sim_sorted_words[np.argsort(indices)]
+
+# %% [markdown]
+# Taking a broader look, we see that there is no distinct similarity between the mean word vector and the document vector
+
+# %%
+# TESTESTEST - SAME FOR ENTIRE LABELED CORPUS - SEE IF ALL MEAN WV AVERAGE OUT TO 0?
+key2label = {k: l for k, l in zip(labeled_train_set.keys, labeled_train_set.labels)}
+
+for td in labeled_train_set.sample(10):
+    doc_dv = classifier.model.dv[td.tags[0]]
+    doc_wv = np.array([classifier.model.wv[word] for word in td.words])
+    dv2mean_wv_sim = classifier.model.dv.cosine_similarities(doc_dv, [doc_wv.mean(axis=0)])[0]
+    print(key2label[td.tags[0]], dv2mean_wv_sim)
+
+# %% [markdown]
+# ## A different angle - let's try to find and compare the words most similar to the mean "good"/"bad" vectors, vs. those most common in the "good"/"bad" documents
+#
+# ### 1) Most common per-doc tokens for good/bad policies
+
+# %%
+# getting all "good" samples, lazily
+good_train_set = labeled_train_set.get_labeled("good", tokens_only=True)
+bad_train_set = labeled_train_set.get_labeled("bad", tokens_only=True)
+
+# creating a Dictionary from all of them
+from gensim.corpora.dictionary import Dictionary
+
+good_dct = Dictionary(good_train_set)
+bad_dct = Dictionary(bad_train_set)
+
+# TEST - displaying word clouds for all good/bad policies
+# _ = display_wordcloud(good_dct, per_doc=False)
+# _ = display_wordcloud(bad_dct, per_doc=False)
+
+# %% [markdown]
+# Since they dictionaries will share many common words, let's use a filtered version of the total corpus dictionary to filter both
+
+# %%
+# no_above = 0.5
+
+# filtered_corpus_dct = deepcopy(cp.dct)
+# all_dct_tokens = set([filtered_corpus_dct[id] for id in filtered_corpus_dct.keys()])
+# filtered_corpus_dct.filter_extremes(no_above=no_above)
+# filtered_dct_tokens = set([filtered_corpus_dct[id] for id in filtered_corpus_dct.keys()])
+# print(f"will filter {len(all_dct_tokens - filtered_dct_tokens)} tokens")
+# banal_tokens = [token_ for token_ in all_dct_tokens - filtered_dct_tokens]
+# print(banal_tokens)
+
+# %% [markdown]
+# Now, let's remove those banal tokens from both the good and bad dicts
+
+# %%
+# # get the id of each banal token for each Dictionary (good/bad)
+# good_banal_ids = [good_dct.token2id[token_] for token_ in banal_tokens]
+# bad_banal_ids = [bad_dct.token2id[token_] for token_ in banal_tokens]
+
+# # remove the banal ids from each Dictionary
+# good_dct.filter_tokens(good_banal_ids)
+# bad_dct.filter_tokens(bad_banal_ids)
+
+# %% [markdown]
+# a different method would be to remove the common tokens
+
+# %%
+# get the id of each common token for each Dictionary (good/bad)
+common_tokens = set(good_dct.values()) & set(bad_dct.values())
+good_common_ids = [good_dct.token2id[token_] for token_ in common_tokens]
+bad_common_ids = [bad_dct.token2id[token_] for token_ in common_tokens]
+
+# remove the banal ids from each Dictionary
+good_dct.filter_tokens(good_common_ids)
+bad_dct.filter_tokens(bad_common_ids)
+
+# %% [markdown]
+# Let's checkout wordclouds to see a difference
+
+# %%
+print("'Good'")
+_ = display_wordcloud(good_dct, per_doc=True)
+print("'Bad'")
+_ = display_wordcloud(bad_dct, per_doc=True)
+
+# %% [markdown]
+# Now lets keep the sorted tokens for the good/bad:
+
+# %%
+# good
+good_tokens = np.array([good_dct[id] for id in good_dct.dfs.keys()])
+good_dfs = np.array(list(good_dct.dfs.values()))
+good_dfs_sorted_idxs = np.argsort(good_dfs)[::-1]
+good_sorted_tokens = good_tokens[good_dfs_sorted_idxs]
+
+# bad
+bad_tokens = np.array([bad_dct[id] for id in bad_dct.dfs.keys()])
+bad_dfs = np.array(list(bad_dct.dfs.values()))
+bad_dfs_sorted_idxs = np.argsort(bad_dfs)[::-1]
+bad_sorted_tokens = bad_tokens[bad_dfs_sorted_idxs]
+
+# TEST
+print("most common good tokens: ", good_sorted_tokens[:20])
+print()
+print("most common bad tokens: ", bad_sorted_tokens[:20])
+
+# %% [markdown]
+# This is the most promising one, I guess - but there are not enough good documents to get a good statistic for the most common good-only tokens...
+
+# %% [markdown]
+# ### 2) Seeing which words are most similar to the mean good/bad document vectors
+
+# %%
+mean_good_vec = classifier.mean_labeled_model_vector("good")
+mean_bad_vec = classifier.mean_labeled_model_vector("bad")
+
+mean_good_vs_wv_sims_sorted_idxs = np.argsort(
+    classifier.model.dv.cosine_similarities(mean_good_vec, classifier.model.wv.vectors)
+)[::-1]
+sorted_good_sim_words = [
+    classifier.model.wv.index_to_key[idx] for idx in mean_good_vs_wv_sims_sorted_idxs
+]
+
+mean_bad_vs_wv_sims_sorted_idxs = np.argsort(
+    classifier.model.dv.cosine_similarities(mean_bad_vec, classifier.model.wv.vectors)
+)[::-1]
+sorted_bad_sim_words = [
+    classifier.model.wv.index_to_key[idx] for idx in mean_bad_vs_wv_sims_sorted_idxs
+]
+
+# %% [markdown]
+# Check out the most similar words to the mean good and mean bad document vectors, respectively
+
+# %%
+print(sorted_good_sim_words[:20])
+print()
+print(sorted_bad_sim_words[:20])
+
+# %% [markdown]
+# Compare to the prevalence-based collection:
+
+# %%
+print(good_sorted_tokens[:20])
+print()
+print(bad_sorted_tokens[:20])
 
 # %%
 raise RuntimeError("STOP HERE!")
@@ -884,8 +1108,8 @@ original_train_set_vec = np.array(
 )
 
 # # XGBClassifier - get just the labeled parts of it (since this is supervised classification, which must have labeles)
-# original_train_set_labeled, _ = original_train_set.get_labeled()
-# original_test_set_labeled, _ = original_test_set.get_labeled()
+# original_train_set_labeled = original_train_set.get_labeled()
+# original_test_set_labeled = original_test_set.get_labeled()
 
 # # transform the labeled train_set using d2vtrans
 # original_train_set_labeled_vec = np.array(
@@ -1130,7 +1354,7 @@ display(pd.DataFrame(search.cv_results_))
 Beep(1000, 500)  # Beep at 1000 Hz for 500 ms
 
 # transform test_set using pretrained Doc2Vec
-original_test_set_labeled, _ = original_test_set.get_labeled()
+original_test_set_labeled = original_test_set.get_labeled()
 original_test_set_labeled_vec = d2vtrans.transform(original_test_set_labeled)
 
 # Get the score of the best model on the test set

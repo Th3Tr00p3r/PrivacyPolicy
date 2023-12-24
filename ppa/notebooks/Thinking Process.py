@@ -14,6 +14,7 @@
 # ---
 
 # %% [markdown]
+# ## TODO: A different option for classification could be using Bayesian inference to predict the label according to the score distribution for each label (A-E) and the calculated score.
 # ## TODO: see into turning this into a regression problem, i.e. giving PPs a score 0-1?
 # * Idea - decide on scores for the ToS;DR labels, i.e. A=1.0, B=0.75, C=0.50, D=0.25, E=0.0 and when calculating the score for an inferred policy do it in the following way:
 #     1) Average all labeled training policies of each label.
@@ -41,6 +42,200 @@ import pandas as pd
 
 # Configure logging
 config_logging()
+
+# %% [markdown]
+# # Supervised Classification using a fine-tuned DistilBERT
+# We could try to use supervised classification using only the the labeled samples. If that at least moderately works, we could attempt to ensemble the two models (D2VClassifier and the fine-tuned DistilBERT)
+
+# %% [markdown]
+# First, we acquire a dictionary which maps each labeled domain/tag to its label:
+
+# %%
+import asyncio
+from ppa.processing import ToSDRDataLoader
+
+# Instantiate data-loading object
+data_loader = ToSDRDataLoader()
+# ratings_df = await data_loader.load_data()  # type: ignore
+ratings_df = pd.DataFrame({})
+raise ValueError("Uncomment the 'await'!!!")
+
+
+def relabel_rating1(rating: str):
+    """Doc."""
+
+    if rating in "AB":
+        return "good"
+    elif rating in "CDE":
+        return "bad"
+    else:
+        return rating
+
+
+ratings_df["label"] = ratings_df["rating"].apply(relabel_rating1)
+
+# Convert two columns into a dictionary
+url2label = dict(zip(ratings_df["tag"], ratings_df["label"]))
+
+# %% [markdown]
+# Next, we get only the labeled raw documents - we would need to tokenize them in the same way BERT was trained, so we cannot use the processed corpus prepared for Doc2Vec. We just need a Dataframe with one column named "text" and another named "label".
+
+# %% [markdown]
+# Getting all labeled paths
+
+# %%
+from pathlib import Path
+import random
+
+REPO_PATH = Path("D:/MEGA/Programming/ML/Data/") / "privacy-policy-historical"
+
+# get all privacy policy markdown file paths in a (random) list
+print("Loading all privacy policy paths to memory... ", end="")
+labeled_policy_paths = [
+    fpath for fpath in REPO_PATH.rglob("*.md") if fpath.stem in url2label.keys()
+]
+SEED = 42
+rng = np.random.default_rng(seed=SEED)
+print("Shuffling... ", end="")
+rng.shuffle(labeled_policy_paths)
+print(f"Loaded {len(labeled_policy_paths):,} privacy policy files.")
+
+# %% [markdown]
+# Using the paths and the labels dictionary to construct a `DataFrame`
+
+# %%
+from datasets import ClassLabel, Dataset
+from typing import List, Dict
+
+data: List[Dict] = []
+
+for fpath in labeled_policy_paths:
+    label = url2label[fpath.stem]
+    with open(fpath, "r", encoding="utf-8") as f:
+        # Read all but the header
+        _, *doc_lines = f.readlines()
+        text = "\n".join(doc_lines)[2:]
+        data.append({"text": text, "label": label})
+
+# Creating a DataFrame from the collected data
+corpus_df = pd.DataFrame(data)
+
+# %%
+# Convert the DataFrame to a Hugging Face Dataset
+ds = Dataset.from_pandas(corpus_df)
+ds = ds.cast_column("label", ClassLabel(names=["bad", "good"]))
+
+# train/test splitting
+ds = ds.train_test_split(test_size=0.2, stratify_by_column="label")
+
+# %% [markdown]
+# We get a relevant distilbert tokenizer from Hugging Face (HF), and use it to tokenize the dataset (take some time)
+
+# %%
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+
+
+def preprocess_function(examples):
+    return tokenizer(examples["text"], truncation=True)
+
+
+tokenized_corpus = ds.map(preprocess_function, batched=True)
+
+# %% [markdown]
+# Initialize data collator for training
+
+# %%
+from transformers import DataCollatorWithPadding
+
+data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+# %% [markdown]
+# Get metrics
+
+# %%
+# import evaluate
+
+# accuracy = evaluate.load("accuracy")
+
+# def compute_metrics(eval_pred):
+#     predictions, labels = eval_pred
+#     predictions = np.argmax(predictions, axis=1)
+#     return accuracy.compute(predictions=predictions, references=labels)
+
+from sklearn.metrics import balanced_accuracy_score
+
+
+def compute_metrics(eval_pred):
+    predictions, labels = eval_pred
+    predictions = np.argmax(predictions, axis=1)
+    balanced_acc = balanced_accuracy_score(y_true=labels, y_pred=predictions)
+    return {"balanced_accuracy": balanced_acc}
+
+
+# %% [markdown]
+# Define label/reverse dicts
+
+# %%
+id2label = {0: "NEGATIVE", 1: "POSITIVE"}
+label2id = {"NEGATIVE": 0, "POSITIVE": 1}
+
+# %% [markdown]
+# Initialize model
+
+# %%
+from transformers import AutoModelForSequenceClassification, TrainingArguments, Trainer
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased", num_labels=2, id2label=id2label, label2id=label2id
+)
+
+# %% [markdown]
+# Train model
+
+# %%
+training_args = TrainingArguments(
+    output_dir="my_awesome_model",
+    learning_rate=2e-5,
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    num_train_epochs=2,
+    weight_decay=0.01,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+    push_to_hub=True,
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_corpus["train"],
+    eval_dataset=tokenized_corpus["test"],
+    tokenizer=tokenizer,
+    data_collator=data_collator,
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+
+# %% [markdown]
+# Predict
+
+# %%
+from transformers import pipeline
+
+classifier = pipeline("sentiment-analysis", model="./my_awesome_model")
+classifier(corpus_df.iloc[985]["text"][:2450])
+
+# %%
+trainer.predict(tokenized_corpus["test"])
+
+# %%
+
+# %%
+raise RuntimeError("STOP HERE!")
 
 # %% [markdown]
 # # The General Idea
@@ -124,21 +319,21 @@ print(f"Loaded {len(policy_paths):,}/{len(all_policy_paths):,} privacy policy fi
 # %%
 from ppa.processing import CorpusProcessor
 
-# SHOULD_REPROCESS = True
-SHOULD_REPROCESS = False
+SHOULD_REPROCESS = True
+# SHOULD_REPROCESS = False
 
 CORPUS_DIR_PATH = Path.cwd().parent / "corpus"
 
 # build and save dictionary from all documents, process all documents and serialize (compressed) the TaggedDocument objects to disk
 if SHOULD_REPROCESS:
     # create a document processor with the paths
-    cp = CorpusProcessor()
+    cp: CorpusProcessor = CorpusProcessor()
     cp.process_corpus(
         policy_paths,
         lemmatize=False,
         should_filter_stopwords=False,
         bigrams=True,
-        bigram_threshold=0.75,
+        bigram_threshold=0.5,
         n_below=None,
         no_above=1.0,
         min_percentile=0.5,
@@ -365,8 +560,8 @@ from ppa.utils import timer
 from datetime import datetime
 import time
 
-# SHOULD_FIT_MODEL = True
-SHOULD_FIT_MODEL = False
+SHOULD_FIT_MODEL = True
+# SHOULD_FIT_MODEL = False
 
 if SHOULD_FIT_MODEL:
 
@@ -406,38 +601,38 @@ else:
 # Cross validate
 
 # %%
-# from sklearn.model_selection import cross_validate
+from sklearn.model_selection import cross_validate
 
-# toy_train_set = cp.generate_samples(
-#     seed=SEED,
-# )
-# print(toy_train_set)
+toy_train_set = cp.generate_samples(
+    seed=SEED,
+)
+print(toy_train_set)
 
-# CV = 4
+CV = 4
 
-# tic = time.perf_counter()
-# logging.info("Starting CV...")
-# scores = cross_validate(
-#     D2VClassifier(
-#         epochs=10,
-#         vector_size=84,
-#         window=5,
-#         negative=20,
-#         seed=SEED,
-#         #         train_score=True,
-#         #     workers=psutil.cpu_count(logical=False) - 1
-#     ),
-#     toy_train_set,
-#     toy_train_set.labels,
-#     cv=CV,
-#     return_train_score=True,
-#     verbose=10,
-#     n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
-# )
-# logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
-# print("Mean test score: ", np.nanmean(scores["test_score"]))
-# scores_df = pd.DataFrame(scores)
-# display(scores_df)
+tic = time.perf_counter()
+logging.info("Starting CV...")
+scores = cross_validate(
+    D2VClassifier(
+        epochs=10,
+        vector_size=84,
+        window=5,
+        negative=20,
+        seed=SEED,
+        #         train_score=True,
+        #     workers=psutil.cpu_count(logical=False) - 1
+    ),
+    toy_train_set,
+    toy_train_set.labels,
+    cv=CV,
+    return_train_score=True,
+    verbose=10,
+    n_jobs=min(CV, psutil.cpu_count(logical=False) - 1),
+)
+logging.info(f"CV timing: {(time.perf_counter() - tic)/60:.1f} mins")
+print("Mean test score: ", np.nanmean(scores["test_score"]))
+scores_df = pd.DataFrame(scores)
+display(scores_df)
 
 # %% [markdown]
 # Train on the entire corpus

@@ -148,6 +148,270 @@ else:
 Beep(1000, 500)
 
 # %% [markdown]
+# # TODO: FIX THE ORDERING AND NUMBERING!
+# # Extracting many more privacy policies
+
+# %% [markdown]
+# get the (latest) list of domains using the modern [Tranco list](https://tranco-list.eu/):
+
+# %%
+from tranco import Tranco
+
+t = Tranco(cache=True, cache_dir=".tranco")
+
+latest_list = t.list()
+
+# get an actual list, for comfort
+tranco_domains = list(latest_list.list.keys())
+print(f"Got the latest Tranco list, containing {len(tranco_domains):,} domains.")
+
+# TEST - print the 10 highest ranked
+tranco_domains[:10]
+
+# %% [markdown]
+# First, let's see how many more labeled poicies I can potentially get using the list - I need to get a list of all of the unused labels in the ToS;DR database which exist in the Tranco list. That would involve extracting new information from the ToS;DR website.
+
+# %%
+import asyncio
+from ppa.processing import ToSDRDataLoader
+
+print(f"Getting domains... ", end="")
+domains = [fpath.stem for idx, fpath in enumerate(policy_paths)]
+print(f"{len(domains):,} domain URLs obtained.")
+
+# Instantiate data-loading object
+data_loader = ToSDRDataLoader()
+
+# set flags
+FORCE_EXT = True
+# FORCE_EXT = False
+FORCE_TRANS = True
+# FORCE_TRANS = False
+
+# combine existing policiy domains with Tranco list, and ETL
+ratings_df = await data_loader.load_data(  # type: ignore
+    list(set(tranco_domains) | set(domains)),
+    force_extract=FORCE_EXT,
+    force_transform=FORCE_TRANS,
+)
+
+# how many datapoints are there
+print("Number of records: ", len(ratings_df))
+
+# how many labels do I have
+print("Number of labels: ", ratings_df["rating"].notna().sum())
+
+# how many possible duplicates do I have
+print("Possible duplicates: ", len(ratings_df) - ratings_df["id"].nunique())
+
+ratings_df.sample(10)
+
+# %% [markdown]
+# building a class for extracting content from webpages
+
+# %%
+from dataclasses import dataclass
+from pathlib import Path
+import httpx
+import re
+from ppa.utils import timer
+from typing import List, Set
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
+
+@dataclass
+class URLFetcher:
+    """Doc."""
+
+    raw_data_fpath: Path = Path("./testing")
+
+    @timer(1000, beep=True)
+    async def fetch_urls(self, urls: List[str], **kwargs):
+        """Doc."""
+        # TODO: adapt this method to be the one which goes over the whole 1M list and extracts policies
+        # if can find them, saving as .txt files in a folder.
+        # index can be gotten using glob if the filenames are the domains
+        # it should be robust to restarting, so each item in the suplied list is only fetched
+        # if a .txt file doen't already exist (or if it is older than some time)
+
+        logging.info("Started loading data.")
+
+        # Ensure file exists
+        with open(self.raw_data_fpath, "w"):
+            pass
+
+        # Make requests asynchronously
+        async with httpx.AsyncClient() as client:
+            for url in urls:
+                # write contents to file if managed to fetch them
+                if (response := await self.fetch_url(url, **kwargs)) is not None:
+                    await self._write_response(response)
+
+        # Done
+        logging.info("Finished loading data.")
+
+    async def fetch_url(
+        self, async_client: httpx.AsyncClient, url: str, archived=True, **httpx_kwargs
+    ) -> httpx.Response:
+        """Get a single response, asynchronously. Falls back to Internet Archive if can't access page."""
+
+        # default timeout is 10 seconds
+        httpx_kwargs["timeout"] = httpx_kwargs.get("timeout", 10)
+
+        try:
+            # Call API (single url)
+            response = await async_client.get(url, **httpx_kwargs)
+
+            # If successful call
+            if response.status_code == 200:
+                logging.info(f"{url}: Success!")
+                return response
+            else:
+                logging.info(f"{url}: Failed to fetch data. Status code: {response.status_code}.")
+                # try archived version
+                if archived:
+                    logging.info(f"{url}: Attempting to fetch latest archived version...")
+                    return await self.fetch_url(
+                        async_client,
+                        "https://web.archive.org/web/20/" + url,
+                        archived=False,
+                        **httpx_kwargs,
+                    )
+
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            logging.info(f"{url}: {exc}")
+
+            # try archived version
+            if archived:
+                logging.info(f"{url}: Attempting to fetch latest archived version...")
+                return await self.fetch_url(
+                    async_client,
+                    "https://web.archive.org/web/20/" + url,
+                    archived=False,
+                    **httpx_kwargs,
+                )
+
+    def extract_links(
+        self,
+        response: httpx.Response,
+        sublinks_only: bool = False,
+    ) -> Set[str]:
+        """Extracts links from the given response."""
+
+        soup = BeautifulSoup(response.content, "html.parser")
+        base_url = str(response.url)
+
+        links = {
+            urljoin(base_url, link.get("href")) for link in soup.find_all("a") if link.get("href")
+        }
+
+        if sublinks_only:
+            base_url_len = len(base_url)
+            links = {
+                link for link in links if link.startswith(base_url) and len(link) > base_url_len
+            }
+
+        return links
+
+    async def _write_response(self, response):
+        """
+        Write a response to the data file.
+
+        Args:
+            response: The response to write to the file.
+
+        Returns:
+            None
+        """
+        async with aiofiles.open(self.raw_data_fpath, "a") as json_file:
+            await json_file.write(f"{json.dumps(response.json())}\n")
+
+
+url_fetcher = URLFetcher()
+
+# %%
+from courlan import validate_url
+from urllib.parse import urlparse, urlunparse
+import trafilatura as trf
+
+
+def clean_query_params(url: str):
+    """Doc."""
+
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
+def contains_any(target_string, strings_to_check):
+    return any(check_string in target_string for check_string in strings_to_check)
+
+
+N = 4
+URL = tranco_domains[N]
+print("DOMAIN: ", URL)
+
+pp_docs = []
+async with httpx.AsyncClient() as client:  # type: ignore
+    # fetch domain URL
+    response = await url_fetcher.fetch_url(  # type: ignore
+        client,
+        f"https://{URL}",
+    )
+
+    # if successful, search for privacy policy links
+    if response:
+        fetched_links = url_fetcher.extract_links(response)
+        try:
+            privacy_policy_links = [link for link in fetched_links if link.find("privacy") != -1]
+            print("privacy_policy_links:\n", privacy_policy_links)  # TESTESTEST
+            # if there's more than 1 link containing 'privacy', try filtering further with 'statement' or 'policy'
+            if len(privacy_policy_links) > 1:
+                filtered_policy_links = [
+                    link
+                    for link in privacy_policy_links
+                    if contains_any(link, ("statement", "policy", "legal", "notice"))
+                ]
+                if filtered_policy_links:
+                    privacy_policy_links = filtered_policy_links
+            privacy_policy_link, *_ = privacy_policy_links
+            # clean the link
+            privacy_policy_link = clean_query_params(privacy_policy_link)
+
+        except ValueError:
+            logging.info(f"{URL}: No links containing the string 'privacy' were found!")
+        else:
+            # now fetch the privacy policy URL
+            pp_response = await url_fetcher.fetch_url(  # type: ignore
+                client,
+                privacy_policy_link,
+                archived=False,  # don't allow looking at internet archive for sublinks
+                timeout=10,
+            )
+            if pp_response:  # TODO: use try/except instead of 'if'
+                doc = trf.extract(pp_response.text, include_links=True)
+                # if returns a redirect link, follow it further (happens for 'google.com')
+                if validate_url(doc)[0]:
+                    pp_response = await url_fetcher.fetch_url(  # type: ignore
+                        client,
+                        doc,
+                        archived=False,  # don't allow looking at internet archive for sublinks
+                    )
+                    if pp_response:
+                        doc = trf.extract(pp_response.text, include_links=True)
+
+                pp_docs.append(doc)
+
+
+print(pp_docs[0])
+
+# %%
+pp_docs[0]
+
+# %%
+pp_response.text
+
+# %% [markdown]
 # # 2. Preliminary EDA
 # Now that we have an easily accesible basic database, let's try exploring it. We can try using only a subset of the database for now (say 10K documents)
 #
@@ -262,15 +526,9 @@ _ = display_wordcloud(filtered_dct, per_doc=True)
 # 5) The index file is used to add secondary tags to the `TaggedDocument` objects provided to Doc2Vec during training, and for synchronizing between policies and their labels during scoring of the model.
 
 # %%
-from itertools import chain
-
-# N = 10
-N = np.inf
-
 print(f"Getting URLs... ", end="")
-# tags = [tagged_doc.tags[0] for idx, tagged_doc in enumerate(chain(train_data, test_data)) if idx < N]
-tags = [fpath.stem for idx, fpath in enumerate(policy_paths) if idx < N]
-print(f"{len(tags):,} URLs obtained.")
+domains = [fpath.stem for idx, fpath in enumerate(policy_paths)]
+print(f"{len(domains):,} domain URLs obtained.")
 
 # %% [markdown]
 # ETL
@@ -285,21 +543,18 @@ from ppa.processing import ToSDRDataLoader
 # set flags
 # FORCE_EXT = True
 FORCE_EXT = False
-
 # FORCE_TRANS = True
 FORCE_TRANS = False
 
 # Instantiate data-loading object
 data_loader = ToSDRDataLoader()
 
-# ratings_df = await data_loader.load_data(  # type: ignore
-#     tags,
-#     timeout_s=15,
-#     force_extract=FORCE_EXT,
-#     force_transform=FORCE_TRANS,
-# )
-ratings_df = pd.DataFrame({})
-raise ValueError("Uncomment the 'await'!!!")
+ratings_df = await data_loader.load_data(  # type: ignore
+    domains,
+    timeout_s=15,
+    force_extract=FORCE_EXT,
+    force_transform=FORCE_TRANS,
+)
 
 Beep(1000, 500)
 print("Done.")

@@ -2,6 +2,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import platform
 import random
 import re
@@ -180,6 +181,24 @@ class IndexedFile:
             Position index of the key in the file.
         """
         return self.start_pos_list.index(self.key2poslabel[key][0])
+
+
+def file_last_line(file_path) -> str:
+    """
+    Return the last line of a text file, quickly (seeks from end)
+    See: https://stackoverflow.com/questions/46258499/read-the-last-line-of-a-file-in-python
+    """
+
+    try:
+        with open(file_path, "rb") as f:
+            f.seek(-2, os.SEEK_END)
+            while f.read(1) != b"\n":
+                f.seek(-2, os.SEEK_CUR)
+            last_line = f.readline().decode()
+    except OSError:
+        return None
+    else:
+        return last_line
 
 
 def longest_most_common_phrase(phrases, text):

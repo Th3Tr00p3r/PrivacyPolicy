@@ -25,6 +25,7 @@ from ppa.utils import (
     IndexedFile,
     combine_with_separators,
     concatenate_nearest_neighbors,
+    file_last_line,
     get_file_index_path,
     longest_most_common_phrase,
     timer,
@@ -1038,7 +1039,7 @@ class ToSDRDataLoader:
 
     async def load_data(
         self,
-        queries: List[str],
+        domains: List[str] = None,
         force_extract=False,
         force_transform=False,
         beep=True,
@@ -1048,7 +1049,7 @@ class ToSDRDataLoader:
         Load data from the ToSDR API, transform it, and return it as a DataFrame.
 
         Args:
-            queries (List[str]): A list of queries to search in the ToSDR API.
+            domains (List[str]): A list of domains to search in the ToSDR API.
             force_extract (bool): Force data extraction from the API (default is False).
             force_transform (bool): Force data transformation (default is False).
             beep (bool): Enable a beep notification (default is True).
@@ -1058,17 +1059,17 @@ class ToSDRDataLoader:
         """
         # Extract fresh raw data
         if not self.raw_data_fpath.exists() or force_extract:
-            await self._extract_data(queries, **kwargs)
+            await self._extract_data(domains, **kwargs)
 
         # Transform and load afresh
         if not self.database_fpath.exists() or force_transform:
             # Transform the raw data into a dictionary object
             df = self._transform_data()
             # Save to a JSON file
-            df.to_json(self.database_fpath)
+            df.to_json(self.database_fpath, orient="records", lines=True)
 
         # Read the JSON file into a Pandas DataFrame
-        return pd.read_json(self.database_fpath)
+        return pd.read_json(self.database_fpath, lines=True)
 
     def _transform_data(self) -> pd.DataFrame:
         """
@@ -1099,60 +1100,60 @@ class ToSDRDataLoader:
         return df
 
     @timer(1000, beep=True)
-    async def _extract_data(self, queries: List[str], timeout_s=10, **kwargs):
+    async def _extract_data(self, domains: List[str], timeout_s=10, fresh: bool = False, **kwargs):
         """
         Extract data from the ToSDR API asynchronously and write it to a file.
 
         Args:
-            queries (List[str]): A list of queries to search in the ToSDR API.
+            domains (List[str]): A list of domains to search in the ToSDR API.
             timeout_s (int): Timeout duration in seconds (default is 10).
 
         Returns:
             None
         """
-
-        async def write_response(response):
-            """
-            Write a response to the data file.
-
-            Args:
-                response: The response to write to the file.
-
-            Returns:
-                None
-            """
-            async with aiofiles.open(self.raw_data_fpath, "a") as json_file:
-                await json_file.write(f"{json.dumps(response.json())}\n")
-
+        # TODO: if 'update' (new flag) is false, the function should first filter the domains from existing domains in the transformed dataset.
         logging.info("Started loading data.")
 
-        # Ensure file exists
-        with open(self.raw_data_fpath, "w"):
-            pass
+        # start from last found domain
+        if not fresh:
+            # get last domain from file
+            last_line_json = json.loads(file_last_line(self.raw_data_fpath))
+            last_domain = last_line_json["message"]
+            # trim the head of the domains list up to the found domain
+            last_found_idx = domains.index(last_domain)
+            domains = domains[last_found_idx + 1 :]
+        else:
+            # Re-create the file
+            with open(self.raw_data_fpath, "w"):
+                pass
 
         # Make requests asynchronously
-        async with httpx.AsyncClient() as client:
-            for query in queries:
+        async with httpx.AsyncClient() as client, aiofiles.open(
+            self.raw_data_fpath, "a"
+        ) as json_file:
+            for idx, domain in enumerate(domains):
+                # Track progress visually
+                if not (idx + 1) % ((n_domains := len(domains)) / 10):
+                    logging.info(f"{(idx+1)/n_domains:.1%}... ")
+
                 try:
-                    # Call API (single query)
-                    response = await client.get(f"{self.api_url}{query}", timeout=timeout_s)
+                    # Call API (single domain)
+                    response = await client.get(f"{self.api_url}{domain}", timeout=timeout_s)
 
                     # If successful call
                     if response.status_code == 200:
                         # Check that data exists (not empty)
                         if not self._is_data_empty(response):
-                            await write_response(response)
-                            logging.info(f"{query}: Success!")
-                        else:
-                            logging.info(f"{query}: Data is empty!")
+                            # asynchronously write to JSON file
+                            await json_file.write(f"{json.dumps(response.json())}\n")
+                            logging.info(f"{domain}: Success!")
                     else:
                         logging.info(
-                            f"{query}: Failed to fetch data. Status code: {response.status_code}"
+                            f"{domain}: Failed to fetch data. Status code: {response.status_code}"
                         )
 
                 except httpx.TimeoutException as exc:
-                    logging.info(f"{query}: Timed-out while fetching data. Error: {exc}")
-                    continue
+                    logging.info(f"{domain}: Timed-out while fetching data. Error: {exc}")
 
         logging.info("Finished loading data.")
 

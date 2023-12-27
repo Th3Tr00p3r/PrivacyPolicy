@@ -3,6 +3,9 @@
 *.epj
 .jedi/
 
+# Tranco
+ppa/notebooks/.tranco/
+
 # virtual environment
 .venv/
 

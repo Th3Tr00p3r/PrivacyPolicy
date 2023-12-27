@@ -17,6 +17,7 @@ pinned: false
 [![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)
 [![Python Versions](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/)
 [![HuggingFace/Gradio](https://img.shields.io/badge/deployment-gradio-orange)](https://huggingface.co/spaces/molehillnest/PPA)
+[![CodeStyle](https://img.shields.io/badge/code_style-black-black)](https://github.com/psf/black?tab=readme-ov-file)
 
 Have you ever read a privacy policy? In a world inundated with digital agreements and privacy statements, understanding the fine print often becomes a daunting task. PPA aims to be your ally in this realm, deciphering the intricacies of these policies and empowering you to make informed decisions.
 
@@ -26,7 +27,9 @@ Imagine a tool that swiftly dissects the language of privacy policies, unravelin
 
 ## Thinking Process
 
-The project begins with data gathering from the paper available at [Princeton's PrivacyPolicies](https://privacypolicies.cs.princeton.edu/), which provides a substantial database of privacy policies. These policies are gathered and processed, leveraging techniques in ETL (Extract, Transform, Load) to clean, tokenize, and create vector embeddings for analysis. While most policies lack explicit labels, a small subset (approximately 1%) has secondary tags denoting their quality as 'good' or 'bad'.
+The project truly commenced upon encountering the [Princeton-Leuven Longitudinal Corpus of Privacy Policies](https://privacypolicies.cs.princeton.edu/), which provides a substantial database of around 100K unique privacy policies. These policies were gathered, processed, and embedded into a vector space using [Doc2Vec](https://radimrehurek.com/gensim/auto_examples/tutorials/run_doc2vec_lee.html#sphx-glr-auto-examples-tutorials-run-doc2vec-lee-py).
+
+To assign labels to the policies, I sourced data from [ToS;DR](https://tosdr.org/), which provides a community-driven database of combined ratings for privacy policies and terms of service. Utilizing this, domain names from policy file-paths were gathered, and the ToS;DR search API assigned letter scores ('A' to 'E') to rated policies. Simplifying the ratings, 'A' or 'B' were labeled 'good,' while the rest ('C', 'D', and 'E') were labeled 'bad.'
 
 The D2VClassifier employs a hybrid unsupervised-learning/supervised inference approach, based on Doc2Vec. First, the Doc2Vec model is trained on the entire corpus. For the training set policies which do posses labeles, it computes mean vectors for each class ('good' and 'bad'). When presented with a new document, the Doc2Vec model infers a vector representation, and the classifier calculates its similarity to the mean vectors. The resulting score reflects the closeness of the document to the learned 'good' and 'bad' representations.
 
@@ -68,24 +71,26 @@ The CLI script fetches the document text from the provided URL using trafilatura
 
 ## Future Work
 
-The current project is continuously evolving, with several improvements and avenues for enhancement under consideration or in progress.
+The project is continuously evolving, with several improvements and enhancements in progress.
 
 ### Consideration of Downstream Supervised Classification
 
-Exploration is underway to transition towards downstream supervised classification, contingent on acquiring a more extensive set of labeled data. A larger dataset may obviate the need for secondary labels while using Doc2Vec as a pure transformer model.
+Efforts are underway to transition towards downstream supervised classification, contingent on acquiring a more extensive labeled dataset.
 
 ### Proposed Enhancements
 
-#### Upsampling of 'Good'-Labeled Policies
+#### Acquiring More Training Data
 
-One potential enhancement involves strategic up-sampling or mixing in copies of 'good'-labeled policies in the training data. The intent is to balance the dataset, aiding the model's comprehension of 'good' policies. Careful consideration is required to prevent overfitting while enhancing the model's generalization.
+I'm actively acquiring significantly more data by scraping privacy policies using the modern [Tranco list](https://tranco-list.eu/), updating a smart aggregation of the top 1M visited domains from four popular lists. Simultaneously, I'm collecting potential labels for additional policies from ToS;DR.
 
 #### Pseudo-Labeling Unlabeled Training Data
 
-Another avenue being explored is pseudo-labeling unlabeled training data with high/low thresholds for prediction. This strategy aims to bolster scoring robustness by averaging model summary vectors, particularly the 'good' ones, across a wider sample set. This could enable finer-tuning based on scores and potentially lay the groundwork for supervised classification in the future.
+Another avenue being explored involves pseudo-labeling unlabeled training data with high/low thresholds for prediction. This strategy aims to enhance scoring robustness by averaging model summary vectors, especially the 'good' ones, across a broader sample set. This could refine tuning based on scores and lay the groundwork for supervised classification.
 
 These enhancements and strategies are designed to refine the model's accuracy, robustness, and applicability. They particularly aim to address the challenge of representing 'good' and 'bad' policies beyond crude mean single-vector representations offered by Doc2Vec. The goal is to enable a more nuanced understanding of privacy policies by leveraging more complex classification models capable of capturing the intricate features embedded within the data.
 
-### License
+### Contribution and License
+
+While I'm not accepting pull requests at this early stage, any feedback is welcome. You're encouraged to [sign up to ToS;DR](https://edit.tosdr.org/users/sign_up) to contribute to the labeling effort.
 
 This project is licensed under the MIT License. See [LICENSE](https://github.com/Th3Tr00p3r/PrivacyPolicy/blob/master/LICENSE) for more details.

@@ -12,9 +12,10 @@ logs/
 # Gradio's 'flagged' folder
 flagged/
 
-# Processed Data file (not needed for ready models)
+# Processed Data files (not needed for ready models)
 corpus.json
 working corpus/
+ppa/notebooks/.tranco/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

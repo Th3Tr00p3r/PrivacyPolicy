@@ -14,12 +14,12 @@ pinned: false
 # Privacy Policy Analyzer (PPA)
 
 [![Maintenance](https://img.shields.io/maintenance/yes/2023)](https://github.com/Th3Tr00p3r/PrivacyPolicy)
-[![License](https://img.shields.io/badge/license-MIT-l)](/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-8A2BE2)](/LICENSE)
 [![Python Versions](https://img.shields.io/badge/python-3.10-blue)](https://www.python.org/downloads/)
 [![HuggingFace/Gradio](https://img.shields.io/badge/deployment-gradio-orange)](https://huggingface.co/spaces/molehillnest/PPA)
 [![CodeStyle](https://img.shields.io/badge/code_style-black-black)](https://github.com/psf/black?tab=readme-ov-file)
 
-Have you ever read a privacy policy? In a world inundated with digital agreements and privacy statements, understanding the fine print often becomes a daunting task. PPA aims to be your ally in this realm, deciphering the intricacies of these policies and empowering you to make informed decisions.
+Have you ever tried to read a privacy policy? In a world inundated with digital agreements and privacy statements, understanding the fine print often becomes a daunting task. PPA aims to be your ally in this realm, deciphering the intricacies of these policies and empowering you to make informed decisions.
 
 Imagine a tool that swiftly dissects the language of privacy policies, unraveling their content to categorize them simply as 'good' or 'bad.' PPA does just that by harnessing the capabilities of data extraction, text processing, and a unique Doc2Vec-based classification system.
 

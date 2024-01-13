@@ -3,8 +3,10 @@
 *.epj
 .jedi/
 
-# Tranco
+# Local data
 ppa/notebooks/.tranco/
+ppa/notebooks/policies/
+ppa/notebooks/logs/
 
 # virtual environment
 .venv/

@@ -1112,7 +1112,6 @@ class ToSDRDataLoader:
             None
         """
         # TODO: if 'update' (new flag) is false, the function should first filter the domains from existing domains in the transformed dataset.
-        logging.info("Started loading data.")
 
         # start from last found domain
         if not fresh:
@@ -1127,13 +1126,15 @@ class ToSDRDataLoader:
             with open(self.raw_data_fpath, "w"):
                 pass
 
+        logging.info(f"Data extraction started ({(n_domains := len(domains)):,} domains).")
+
         # Make requests asynchronously
         async with httpx.AsyncClient() as client, aiofiles.open(
             self.raw_data_fpath, "a"
         ) as json_file:
             for idx, domain in enumerate(domains):
                 # Track progress visually
-                if not (idx + 1) % ((n_domains := len(domains)) / 10):
+                if not (idx + 1) % (n_domains / 10):
                     logging.info(f"{(idx+1)/n_domains:.1%}... ")
 
                 try:
